@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 
 class Worker:
-    def __init__(self, manager_port, worker_port):
+    def __init__(self, manager_port, manager_hb_port, worker_port):
         logging.info("Starting worker:%s", worker_port)
         logging.info("Worker:%s PWD %s", worker_port, os.getcwd())
 
@@ -36,9 +36,10 @@ class Worker:
 
 @click.command()
 @click.argument("manager_port", nargs=1, type=int)
+@click.argument("manager_hb_port", nargs=1, type=int)
 @click.argument("worker_port", nargs=1, type=int)
-def main(manager_port, worker_port):
-    Worker(manager_port, worker_port)
+def main(manager_port, manager_hb_port, worker_port):
+    Worker(manager_port, manager_hb_port, worker_port)
 
 
 if __name__ == '__main__':

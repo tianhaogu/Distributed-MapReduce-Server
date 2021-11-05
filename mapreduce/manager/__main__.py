@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 
 class Manager:
-    def __init__(self, port):
+    def __init__(self, port, hb_port):
         logging.info("Starting manager:%s", port)
         logging.info("Manager:%s PWD %s", port, os.getcwd())
 
@@ -35,8 +35,9 @@ class Manager:
 
 @click.command()
 @click.argument("port", nargs=1, type=int)
-def main(port):
-    Manager(port)
+@click.argument("hb_port", nargs=1, type=int)
+def main(port, hb_port):
+    Manager(port, hb_port)
 
 
 if __name__ == '__main__':
