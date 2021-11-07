@@ -1,4 +1,6 @@
 import os
+import threading
+import socket
 import logging
 import json
 import time
@@ -16,22 +18,97 @@ class Worker:
         logging.info("Worker:%s PWD %s", worker_port, os.getcwd())
 
         # This is a fake message to demonstrate pretty printing with logging
-        message_dict = {
-            "message_type": "register_ack",
-            "worker_host": "localhost",
-            "worker_port": 6001,
-            "worker_pid": 77811
-        }
-        logging.debug(
-            "Worker:%s received\n%s",
-            worker_port,
-            json.dumps(message_dict, indent=2),
+        # message_dict = {
+        #     "message_type": "register_ack",
+        #     "worker_host": "localhost",
+        #     "worker_port": 6001,
+        #     "worker_pid": 77811
+        # }
+        # logging.debug(
+        #     "Worker:%s received\n%s",
+        #     worker_port,
+        #     json.dumps(message_dict, indent=2),
+        # )
+        self.manager_port = manager_port
+        self.manager_hb_port = manager_hb_port
+        self.worker_port = worker_port
+        self.shutdown = False
+        self.state = ''
+        self.registered = False
+        self.message_dict = {"message_type": ''}
+        self.pid = os.getpid()
+        self.udpHBThread = threading.Thread(
+            target=self.sendHBMessage
         )
+        self.listenIncomingMsg()
 
-        # TODO: you should remove this. This is just so the program doesn't
-        # exit immediately!
-        logging.debug("IMPLEMENT ME!")
-        time.sleep(120)
+        #self.udpHBThread.join()
+    
+    def sendHBMessage(self):
+        while not self.shutdown:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect(("localhost", self.manager_hb_port))
+                message = json.dumps(
+                    {"message_type": "heartbeat", "worker_pid": self.pid}
+                )
+                sock.sendall(message.encode('utf-8'))
+            time.sleep(2)
+    
+    def listenIncomingMsg(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("localhost", self.worker_port))
+            sock.listen()
+            sock.settimeout(1)
+
+            while not self.shutdown:
+                if not self.registered:
+                    self.sendRegistration()
+                try:
+                    clientsocket, address = sock.accept()
+                except socket.timeout:
+                    continue
+                print("Connection from", address[0])
+                with clientsocket:
+                    message_chunks = []
+                    while True:
+                        try:
+                            data = clientsocket.recv(4096)
+                        except socket.timeout:
+                            continue
+                        if not data:
+                            break
+                        message_chunks.append(data)
+                message_bytes = b''.join(message_chunks)
+                message_str = message_bytes.decode("utf-8")
+
+                try:
+                    msg_dict = json.loads(message_str)
+                except json.JSONDecodeError:
+                    continue
+                print(msg_dict)
+                self.message_dict = msg_dict
+                if self.message_dict["message_type"] == "shutdown":
+                    self.shutdown = True
+                elif self.message_dict["message_type"] == "register_ack":
+                    self.udpHBThread.start()
+                    self.registered = True
+                    self.state = 'ready'
+                else:
+                    pass
+            if self.udpHBThread.is_alive():
+                self.udpHBThread.join()
+    
+    def sendRegistration(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.connect(("localhost", self.manager_port))
+            rgst_message = json.dumps({
+                "message_type": "register",
+                "worker_host": "localhost",
+                "worker_port": self.worker_port,
+                "worker_pid": self.pid
+            })
+            sock.sendall(rgst_message.encode('utf-8'))
 
 
 @click.command()
