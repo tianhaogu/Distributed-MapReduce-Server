@@ -8,7 +8,6 @@ import click
 import mapreduce.utils
 
 
-# Configure logging
 logging.basicConfig(level=logging.DEBUG)
 
 

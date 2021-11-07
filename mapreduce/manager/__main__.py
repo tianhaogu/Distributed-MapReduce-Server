@@ -8,9 +8,9 @@ import click
 import shutil
 from pathlib import Path
 import mapreduce.utils
+from mapreduce.helper import WorkerInDict, Job
 
 
-# Configure logging
 logging.basicConfig(level=logging.DEBUG)
 
 
@@ -33,7 +33,7 @@ class Manager:
 
         self.port = port
         self.hb_port = hb_port
-        self.workers = []
+        self.workers = {}
         self.jobQueue = []
         self.shutdown = False
         self.message_dict = {"message_type": ''}
@@ -121,14 +121,18 @@ class Manager:
                     self.forwardAckRegistration(
                         worker_host, worker_port, worker_pid
                     )
-                    self.workers.append(msg_dict)
+                    self.workers[worker_pid] = WorkerInDict(
+                        worker_pid, worker_host, worker_port
+                    )
+                elif self.message_dict["message_type"] == "new_manager_job":
+                    self.createDirectories()
                 else:
                     pass
     
     def forwardShutdown(self):
-        for worker in self.workers:
+        for pid, worker in self.workers.items():
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.connect((worker["worker_host"], worker["worker_port"]))
+                sock.connect((worker.worker_host, worker.worker_port))
                 shutdown_message = json.dumps({"message_type": "shutdown"})
                 sock.sendall(shutdown_message.encode('utf-8'))
         self.shutdown = True
@@ -144,6 +148,18 @@ class Manager:
             })
             sock.sendall(ack_message.encode('utf-8'))
         #self.workers.append(ack_message)
+    
+    def createDirectories(self):
+        job_count = len(self.jobs)
+        first_layer = self.tmp / 'job-{}'.format(job_count)
+        Path.mkdir(first_layer)
+        second_layer_mapper = first_layer / 'mapper-output'
+        second_layer_grouper = first_layer / 'grouper-output'
+        second_layer_reducer = first_layer / 'reducer-output'
+        Path.mkdir(second_layer_mapper)
+        Path.mkdir(second_layer_grouper)
+        Path.mkdir(second_layer_reducer)
+        self.jobs.append(Job(job_count))
 
 
 @click.command()
