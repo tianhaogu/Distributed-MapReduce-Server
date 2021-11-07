@@ -63,7 +63,7 @@ class Manager:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("localhost", self.hb_port))
-            socket.settimeout(1)
+            sock.settimeout(1)
             while not self.shutdown:
                 try:
                     message_bytes = sock.recv(4096)
@@ -72,7 +72,7 @@ class Manager:
                 message_str = message_bytes.decode("utf-8")
                 try:
                     msg_dict = json.loads(message_str)
-                except JSONDecodeError:
+                except json.JSONDecodeError:
                     continue
                 print(msg_dict)
 
