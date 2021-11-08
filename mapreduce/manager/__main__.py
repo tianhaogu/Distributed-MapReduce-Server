@@ -128,8 +128,9 @@ class Manager:
                     )
                 elif self.message_dict["message_type"] == "new_manager_job":
                     self.createDirectories()
-                    self.checkWorkerAndServer(message_dict)
-                    self.jobCounter += 1
+                    readyed_workers = self.checkWorkerServer(self.message_dict)
+                    if len(readyed_workers) > 0:
+                        self.jobExecution(message_dict, readyed_workers)
                 else:
                     pass
     
@@ -163,18 +164,18 @@ class Manager:
         Path.mkdir(second_layer_grouper)
         Path.mkdir(second_layer_reducer)
     
-    def checkWorkerAndServer(self, message_dict):
-        whetherBusy = False
-        job_count = len(self.jobQueue)
+    def checkWorkerServer(self, message_dict):
+        readyed_workers = {}
+        whetherAllBusy = True
         for pid, worker in self.workers.items():
-            if worker.state == WorkerState.BUSY or 
-                    worker.state == WorkerState.DEAD:
-                whetherBusy = True
-                break
-        if whetherBusy or self.serverState != "READY":
+            if not (worker.state == WorkerState.BUSY or \
+                    worker.state == WorkerState.DEAD):
+                whetherAllBusy = False
+                readyed_workers[pid] = worker
+        if whetherAllBusy or self.serverState != "READY":
             self.jobQueue.append(
                 Job(
-                    job_count,
+                    self.jobCounter,
                     message_dict["input_directory"],
                     message_dict["output_directory"],
                     message_dict["mapper_executable"],
@@ -183,7 +184,31 @@ class Manager:
                     message_dict["num_reducers"]
                 )
             )
-
+            self.jobCounter += 1
+        return readyed_workers
+    
+    def jobExecution(self, message_dict, readyed_workers):
+        self.serverState = "EXECUTING"
+        partitioned_filelist = self.inputPartition(message_dict)
+        self.executeMap(message_dict, partitioned_filelist, readyed_workers)
+    
+    def inputPartition(self, message_dict):
+        input_filelist = []
+        for file in Path(message_dict["input_directory"]).glob('*'):
+            original_filelist.append(str(file))
+        input_filelist.sort()
+        partitioned_filelist = []
+        for i in range(message_dict["num_mappers"]):
+            partitioned_filelist.append([])
+        for index, file in enumerate(input_filelist):
+            partitioned_index = index % message_dict["num_mappers"]
+            partitioned_filelist[partitioned_index].append(file)
+        return partitioned_filelist
+    
+    def executeMap(self, message_dict, partitioned_filelist, readyed_workers):
+        logging.info("Manager:%s begin map stage", self.port)
+        # TODO need to be implemented
+        logging.info("Manager:%s end map stage", port_num)
 
 
 @click.command()
