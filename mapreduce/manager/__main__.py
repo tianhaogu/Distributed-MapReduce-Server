@@ -8,7 +8,7 @@ import click
 import shutil
 from pathlib import Path
 import mapreduce.utils
-from mapreduce.helper import WorkerInDict, Job
+from mapreduce.helper import WorkerState, WorkerInDict, Job
 
 
 logging.basicConfig(level=logging.DEBUG)
@@ -35,6 +35,8 @@ class Manager:
         self.hb_port = hb_port
         self.workers = {}
         self.jobQueue = []
+        self.jobCounter = 0
+        self.serverState = 'READY'
         self.shutdown = False
         self.message_dict = {"message_type": ''}
         self.tmp = self.createFolder()
@@ -126,6 +128,8 @@ class Manager:
                     )
                 elif self.message_dict["message_type"] == "new_manager_job":
                     self.createDirectories()
+                    self.checkWorkerAndServer(message_dict)
+                    self.jobCounter += 1
                 else:
                     pass
     
@@ -150,8 +154,7 @@ class Manager:
         #self.workers.append(ack_message)
     
     def createDirectories(self):
-        job_count = len(self.jobs)
-        first_layer = self.tmp / 'job-{}'.format(job_count)
+        first_layer = self.tmp / 'job-{}'.format(self.jobCounter)
         Path.mkdir(first_layer)
         second_layer_mapper = first_layer / 'mapper-output'
         second_layer_grouper = first_layer / 'grouper-output'
@@ -159,7 +162,28 @@ class Manager:
         Path.mkdir(second_layer_mapper)
         Path.mkdir(second_layer_grouper)
         Path.mkdir(second_layer_reducer)
-        self.jobs.append(Job(job_count))
+    
+    def checkWorkerAndServer(self, message_dict):
+        whetherBusy = False
+        job_count = len(self.jobQueue)
+        for pid, worker in self.workers.items():
+            if worker.state == WorkerState.BUSY or 
+                    worker.state == WorkerState.DEAD:
+                whetherBusy = True
+                break
+        if whetherBusy or self.serverState != "READY":
+            self.jobQueue.append(
+                Job(
+                    job_count,
+                    message_dict["input_directory"],
+                    message_dict["output_directory"],
+                    message_dict["mapper_executable"],
+                    message_dict["reducer_executable"],
+                    message_dict["num_mappers"],
+                    message_dict["num_reducers"]
+                )
+            )
+
 
 
 @click.command()
