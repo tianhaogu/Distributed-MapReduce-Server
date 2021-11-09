@@ -5,7 +5,10 @@ import logging
 import json
 import time
 import click
+from pathlib import Path
+import subprocess
 import mapreduce.utils
+from mapreduce.helper import WorkerState, WorkerInDict, Job
 
 
 logging.basicConfig(level=logging.DEBUG)
@@ -92,7 +95,14 @@ class Worker:
                 elif self.message_dict["message_type"] == "register_ack":
                     self.udpHBThread.start()
                     self.registered = True
-                    self.state = 'ready'
+                    self.state = WorkerState.READY
+                elif self.message_dict["message_type"] == "new_worker_task":
+                    if self.registered and self.state == WorkerState.READY:
+                        self.performMapping(self.message_dict)
+                    else:
+                        logging.debug(
+                            "ERROR! Should not assign task to a non-ready worker!"
+                        )
                 else:
                     pass
             if self.udpHBThread.is_alive():
@@ -108,6 +118,36 @@ class Worker:
                 "worker_pid": self.pid
             })
             sock.sendall(rgst_message.encode('utf-8'))
+    
+    def performMapping(self, message_dict):
+        self.state = WorkerState.BUSY
+        input_files = message_dict["input_files"] # a list of strings
+        executable = message_dict["executable"]
+        output_directory = message_dict["output_directory"]
+        output_files = []
+        for input_directory in input_files:
+            input_filename = Path(input_directory).name
+            output_directory = Path(output_directory) / input_filename
+            with open(input_directory, 'r') as infile:
+                outfile = open(str(output_directory), 'w')
+                subprocess.run(
+                    executable, stdin=infile, stdout=outfile, check=True
+                )
+                outfile.close()
+            output_files.append(output_directory)
+        self.sendStatusMessage(output_files)
+        self.state = WorkerState.READY
+    
+    def sendStatusMessage(self, sendStatusMessage):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.connect(("localhost", self.manager_port))
+            status_message = json.dumps({
+                "message_type": "status",
+                "output_files": output_files,
+                "status": "finished",
+                "worker_pid": self.pid
+            })
+            sock.sendall(status_message.encode('utf-8'))
 
 
 @click.command()
