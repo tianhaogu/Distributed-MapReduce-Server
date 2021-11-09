@@ -47,6 +47,7 @@ class Worker:
         #self.udpHBThread.join()
     
     def sendHBMessage(self):
+        """Send heartbeat message back to the manager after it registers."""
         while not self.shutdown:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.connect(("localhost", self.manager_hb_port))
@@ -57,6 +58,7 @@ class Worker:
             time.sleep(2)
     
     def listenIncomingMsg(self):
+        """Listen to incoming messages such as ack, task from the manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("localhost", self.worker_port))
@@ -109,6 +111,7 @@ class Worker:
                 self.udpHBThread.join()
     
     def sendRegistration(self):
+        """Send the registration message to the manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect(("localhost", self.manager_port))
             rgst_message = json.dumps({
@@ -120,6 +123,7 @@ class Worker:
             sock.sendall(rgst_message.encode('utf-8'))
     
     def performMapping(self, message_dict):
+        """Perform the real mapping, pipe to the output via executable cmd."""
         self.state = WorkerState.BUSY
         input_files = message_dict["input_files"] # a list of strings
         executable = message_dict["executable"]
@@ -139,6 +143,8 @@ class Worker:
         self.state = WorkerState.READY
     
     def sendStatusMessage(self, sendStatusMessage):
+        """Send the status messages to the manager, which means it finishes
+        the current task, and ready for the next if there's one."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect(("localhost", self.manager_port))
             status_message = json.dumps({

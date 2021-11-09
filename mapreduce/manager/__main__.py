@@ -50,6 +50,7 @@ class Manager:
         self.udpHBThread.join()
 
     def createFolder(self):
+        """Create the tmp folder when the class is constructed."""
         tmp = Path('tmp')
         tmp.mkdir(exist_ok=True)
         for oldJobFolder in tmp.glob('job-*'):
@@ -57,6 +58,7 @@ class Manager:
         return tmp
 
     def listenHBMessage(self):
+        """Listen heartbeat message sent from workers."""
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("localhost", self.hb_port))
@@ -77,6 +79,8 @@ class Manager:
         return
 
     def listenIncomingMsg(self):
+        """Listen to incoming messages from workers and the command line.
+        Seems as the main thread of this program."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("localhost", self.port))
@@ -112,6 +116,7 @@ class Manager:
                     self.handleShutdown()
                 elif self.message_dict["message_type"] == "register":
                     self.handleRegister()
+                    self.checkTaskJobForWorker(self.message_dict["worker_pid"])
                 elif self.message_dict["message_type"] == "new_manager_job":
                     self.handleNewManagerJob()
                 elif self.message_dict["message_type"] == "status":
@@ -120,10 +125,12 @@ class Manager:
                     pass
     
     def handleShutdown(self):
+        """Shutdown the manager and consequently shutdown all workers."""
         self.shutdown = True
         #self.forwardShutdown()
 
     def handleRegister(self):
+        """Register the worker, send ack message and put it into the Dict."""
         worker_host = self.message_dict["worker_host"]
         worker_port = self.message_dict["worker_port"]
         worker_pid = self.message_dict["worker_pid"]
@@ -133,8 +140,24 @@ class Manager:
         self.workers[worker_pid] = WorkerInDict(
             worker_pid, worker_host, worker_port
         )
+    
+    def checkTaskJobForWorker(self, pid):
+        """Check whether there's currently executing task or pending job
+        when a new worker registers, if so, assign it the first task/job."""
+        if self.serverState == "EXECUTING":
+            if self.exeJobState == "MAPPING":
+                self.readyed_workers.put(self.workers[pid])
+                if len(filelist_mapping_remaining) != 0:
+                    # TODO
+                elif not self.jobQueue.empty():
+                    # TODO
+                else:
+                    pass
+        else:
+            return
 
     def handleNewManagerJob(self):
+        """Handle the new coming job, execute it or put it in the jobQueue."""
         self.createDirectories()
         whether_ready = self.checkWorkerServer(self.message_dict)
         if whether_ready:
@@ -142,6 +165,7 @@ class Manager:
             self.jobExecution(self.message_dict, "mapping")
     
     def handleStatus(self):
+        """Handle the worker status message, set the task and worker Queue."""
         if self.exeJobState == 'MAPPING':
             self.filelist_mapping_remaining.pop(0)
             pid = self.message_dict["worker_pid"]
@@ -156,6 +180,7 @@ class Manager:
             # TODO following stages
 
     def forwardShutdown(self):
+        """Forward the shutdown message to all the workers in the Dict."""
         for pid, worker in self.workers.items():
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.connect((worker.worker_host, worker.worker_port))
@@ -164,6 +189,7 @@ class Manager:
         self.shutdown = True
 
     def forwardAckRegistration(self, worker_host, worker_port, worker_pid):
+        """Forward the ack message to the corresponding worker."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect((worker_host, worker_port))
             ack_message = json.dumps({
@@ -173,9 +199,9 @@ class Manager:
                 "worker_pid" : worker_pid
             })
             sock.sendall(ack_message.encode('utf-8'))
-        #self.workers.append(ack_message)
 
     def createDirectories(self):
+        """Create the directory for all input & output when new job comes."""
         first_layer = self.tmp / 'job-{}'.format(self.jobCounter)
         Path.mkdir(first_layer)
         second_layer_mapper = first_layer / 'mapper-output'
@@ -186,6 +212,9 @@ class Manager:
         Path.mkdir(second_layer_reducer)
 
     def checkWorkerServer(self, message_dict):
+        """When new job comes, the manager checks whether there's any 
+        avaiable workers, and whether it's ready for execution or it's busy.
+        If no readyed worker or it's busy, put the coming job in jobQueue."""
         whetherAllBusy = True
         for pid, worker in self.workers.items():
             if not (worker.state == WorkerState.BUSY or \
@@ -210,11 +239,14 @@ class Manager:
         return True
 
     def jobExecution(self, message_dict, task_signal):
+        """Start to execute the mapping task, note only mapping."""
         if task_signal = "mapping":
             partitioned_filelist = self.inputPartition(message_dict)
             self.executeMap(message_dict, partitioned_filelist)
 
     def inputPartition(self, message_dict):
+        """Perform the partition on the mapping files using round robin.
+        Return a list of list of files according to number of mappers."""
         input_filelist = []
         for file in Path(message_dict["input_directory"]).glob('*'):
             original_filelist.append(str(file))
@@ -228,6 +260,9 @@ class Manager:
         return partitioned_filelist
 
     def executeMap(self, message_dict, partitioned_filelist):
+        """Execute the mapping stage, assign mapping tasks to readyed workers
+        in registered order, simutaneously the readyed_workers queue is set
+        by incoming status message sent back by worker who finishs one task."""
         for filelist in partitioned_filelist:
             self.filelist_mapping_remaining.append(filelist)
         logging.info("Manager:%s begin map stage", self.port)
@@ -246,6 +281,7 @@ class Manager:
         self.exeJobState = 'MAPPING_END'
 
     def sendMappingTask(self, filelist, executable, output_directory, pid):
+        """Send the mapping task message to the corresponding worker."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect(
                 (self.workers[pid].worker_host, self.workers[pid].worker_port)
