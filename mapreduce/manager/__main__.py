@@ -173,7 +173,8 @@ class Manager:
     def checkTaskJobForWorker(self, pid):
         """Check whether there's currently executing task or pending task/job
         when a new worker registers, if so, assign it the next task/job."""
-        if self.serverState == "EXECUTING":
+        if self.serverState == "EXECUTING" and \
+                not self.filelist_remaining.empty():
             self.readyed_workers.put(self.workers[pid])
 
     def handleNewManagerJob(self, msg_dict):
