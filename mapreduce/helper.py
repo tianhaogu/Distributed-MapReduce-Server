@@ -27,13 +27,6 @@ class WorkerInDict:
 
 
 class Job:
-    def __init__(self, job_count, input_directory, output_directory,
-            mapper_executable, reducer_executable,
-            num_mappers, num_reducers):
+    def __init__(self, message_dict):
         self.jid = job_count
-        self.input_directory = input_directory
-        self.output_directory = output_directory
-        self.mapper_executable = mapper_executable
-        self.reducer_executable = reducer_executable
-        self.num_mappers = num_mappers
-        self.num_reducers = num_reducers
+        self.message_dict = message_dict

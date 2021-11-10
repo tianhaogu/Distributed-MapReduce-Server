@@ -19,18 +19,6 @@ class Worker:
         logging.info("Starting worker:%s", worker_port)
         logging.info("Worker:%s PWD %s", worker_port, os.getcwd())
 
-        # This is a fake message to demonstrate pretty printing with logging
-        # message_dict = {
-        #     "message_type": "register_ack",
-        #     "worker_host": "localhost",
-        #     "worker_port": 6001,
-        #     "worker_pid": 77811
-        # }
-        # logging.debug(
-        #     "Worker:%s received\n%s",
-        #     worker_port,
-        #     json.dumps(message_dict, indent=2),
-        # )
         self.manager_port = manager_port
         self.manager_hb_port = manager_hb_port
         self.worker_port = worker_port
