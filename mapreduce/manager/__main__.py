@@ -169,21 +169,18 @@ class Manager:
         self.workers[worker_pid] = WorkerInDict(
             worker_pid, worker_host, worker_port
         )
-    
-    def checkTaskJobForWorker(self, pid):
-        """Check whether there's currently executing task or pending task/job
-        when a new worker registers, if so, assign it the next task/job."""
-        if self.serverState == "EXECUTING" and \
-                not self.filelist_remaining.empty():
-            self.readyed_workers.put(self.workers[pid])
 
     def handleNewManagerJob(self, msg_dict):
         """Handle the new coming job, execute it or put it in the jobQueue."""
         self.createDirectories()
         whether_ready = self.checkWorkerServer()
+        self.jobCounter += 1
         if whether_ready:
+            self.getReadyedWorkers()
             self.serverState = "EXECUTING"
             self.jobExecution(msg_dict, "mapping")
+        else:
+            self.jobQueue.put(Job(self.jobCounter, msg_dict))
     
     def handleStatus(self, msg_dict):
         """Handle the worker status message, set the task and worker Queue."""
@@ -191,11 +188,11 @@ class Manager:
         self.workers[pid].state = WorkerState.READY
         if self.exeJobState == 'MAPPING':
             self.num_list_remaining -= 1
-            #self.filelist_remaining.pop(0)
             if not self.filelist_remaining.empty():
                 self.readyed_workers.put(self.workers[pid])
-        elif self.exeJobState == 'MAPPING_END' and self.num_list_remaining == 0:
-            if self.filelist_remaining.empty():
+        elif self.exeJobState == 'MAPPING_END':
+            self.num_list_remaining -= 1
+            if self.num_list_remaining == 0:
                 logging.info("Manager:%s end map stage", self.port)
                 while not self.readyed_workers.empty():
                     self.readyed_workers.get()
@@ -203,7 +200,7 @@ class Manager:
                 # TODO execute the grouping stage next and change state
                 # self.jobExecution(self.message_dict, "grouping")
             else:
-                logging.info("ERROR! Mapping ends, but task queue not empty!")
+                pass
         else:
             pass
             # TODO following stages
@@ -230,6 +227,7 @@ class Manager:
             sock.sendall(ack_message.encode('utf-8'))
     
     def getReadyedWorkers(self):
+        """Get non-busy or dead workers at the beginning of all 3 stages."""
         for pid, worker in self.workers.items():
             if not (worker.state == WorkerState.BUSY or \
                     worker.state == WorkerState.DEAD):
@@ -250,25 +248,37 @@ class Manager:
         """When new job comes, the manager checks whether there's any 
         avaiable workers, and whether it's ready for execution or it's busy.
         If no readyed worker or it's busy, put the coming job in jobQueue."""
-        self.getReadyedWorkers()
-        # whetherAllBusy = True
-        # for pid, worker in self.workers.items():
-        #     if not (worker.state == WorkerState.BUSY or \
-        #             worker.state == WorkerState.DEAD):
-        #         whetherAllBusy = False
-        #         self.readyed_workers.put(worker)
-        if self.readyed_workers.empty() or self.serverState != "READY":
-            self.jobQueue.put(Job(self.jobCounter, self.message_dict))
-            self.jobCounter += 1
+        whetherAllBusy = True
+        for pid, worker in self.workers.items():
+            if not (worker.state == WorkerState.BUSY or \
+                    worker.state == WorkerState.DEAD):
+                whetherAllBusy = False
+                break
+        if whetherAllBusy or self.serverState != 'READY':
             return False
-        self.jobCounter += 1 
-        return True
+        else:
+            return True
+    
+    def checkTaskJobForWorker(self, pid):
+        """Check whether there's currently executing task or pending task/job
+        when a new worker registers, if so, assign it the next task/job."""
+        if self.serverState == "EXECUTING" and \
+                not self.filelist_remaining.empty():
+            self.readyed_workers.put(self.workers[pid])
 
     def jobExecution(self, msg_dict, task_signal):
-        """Start to execute the mapping task, note only mapping."""
+        """Start to execute the mapping task, note only mapping currently."""
         if task_signal = "mapping":
             partitioned_filelist = self.inputPartition(msg_dict)
             self.executeMap(msg_dict, partitioned_filelist)
+        elif task_signal == "grouping":
+            pass
+            # TODO need to be implemented later for the grouping stage
+        elif task_signal == "reducing":
+            pass
+            # TODO need to be implemented later for the grouping stage
+        else:
+            pass
 
     def inputPartition(self, msg_dict):
         """Perform the partition on the mapping files using round robin.

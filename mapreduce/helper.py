@@ -27,6 +27,6 @@ class WorkerInDict:
 
 
 class Job:
-    def __init__(self, message_dict):
+    def __init__(self, job_count, message_dict):
         self.jid = job_count
         self.message_dict = message_dict
