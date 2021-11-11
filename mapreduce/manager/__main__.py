@@ -111,6 +111,7 @@ class Manager:
                 try:
                     msg_dict = json.loads(message_str)
                 except json.JSONDecodeError:
+                    print("Error occurs here!!!")
                     continue
                 print(msg_dict)
                 if msg_dict["message_type"] == "shutdown":
@@ -122,6 +123,7 @@ class Manager:
                     self.message_dict = msg_dict
                     self.handleNewManagerJob(msg_dict)
                 elif msg_dict["message_type"] == "status":
+                    print("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
                     self.handleStatus(msg_dict)
                 else:
                     pass
@@ -130,7 +132,9 @@ class Manager:
         """Check in-executing tasks and in-queue job at the beginning,
         assign corresponding task/job to the worker if necessary."""
         if not self.filelist_remaining.empty():
+            print("A")
             if not self.readyed_workers.empty():
+                print("AA")
                 curr_filelist = self.filelist_remaining.get()
                 first_worker = self.readyed_workers.get()
                 sendMappingTask(
@@ -139,10 +143,13 @@ class Manager:
                 )
                 self.workers[first_worker.pid].state = WorkerState.BUSY
                 if self.filelist_remaining.empty():
+                    print("AAA")
                     self.exeJobState = 'MAPPING_END'
         elif self.filelist_remaining.empty() and self.exeJobState != 'FREE':
+            print("B")
             pass
         elif not self.jobQueue.empty():
+            print("C")
             if self.serverState == 'READY':
                 while not self.readyed_workers.empty():
                     self.readyed_workers.get()
@@ -152,6 +159,7 @@ class Manager:
                     curr_job = self.jobQueue.get()
                     self.jobExecution(curr_job.message_dict, "mapping")
         else:
+            print("D")
             pass
 
     def handleShutdown(self):
@@ -180,6 +188,7 @@ class Manager:
         if whether_ready:
             self.getReadyedWorkers()
             self.serverState = "EXECUTING"
+            print("THis is the get_readyed_workers: ", self.readyed_workers)
             self.jobExecution(msg_dict, "mapping")
         else:
             self.jobQueue.put(Job(self.jobCounter, msg_dict))
@@ -188,6 +197,7 @@ class Manager:
         """Handle the worker status message, set the task and worker Queue."""
         pid = msg_dict["worker_pid"]
         self.workers[pid].state = WorkerState.READY
+        print("Status comes!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         if self.exeJobState == 'MAPPING':
             self.num_list_remaining -= 1
             if not self.filelist_remaining.empty():
@@ -234,6 +244,7 @@ class Manager:
             if not (worker.state == WorkerState.BUSY or \
                     worker.state == WorkerState.DEAD):
                 self.readyed_workers.put(worker)
+                print("This is the worker: ", self.workers)
 
     def createDirectories(self):
         """Create the directory for all input & output when new job comes."""
@@ -269,8 +280,9 @@ class Manager:
 
     def jobExecution(self, msg_dict, task_signal):
         """Start to execute the mapping task, note only mapping currently."""
-        if task_signal = "mapping":
+        if task_signal == "mapping":
             partitioned_filelist = self.inputPartition(msg_dict)
+            print(partitioned_filelist)
             self.executeMap(msg_dict, partitioned_filelist)
         elif task_signal == "grouping":
             pass
@@ -305,15 +317,19 @@ class Manager:
         self.exeJobState = 'MAPPING'
         self.num_list_remaining = len(partitioned_filelist)
         num_of_original_workers = self.readyed_workers.qsize()
+        print("readyed_workers.qsize(): ", num_of_original_workers)
         while num_of_original_workers > 0:
             curr_filelist = self.filelist_remaining.get()
             firstWorker = self.readyed_workers.get()
-            sendMappingTask(
+            print("curr_filelist: ", curr_filelist)
+            self.sendMappingTask(
                 curr_filelist, msg_dict["mapper_executable"],
                 msg_dict["output_directory"], firstWorker.pid
             )
             self.workers[firstWorker.pid].state = WorkerState.BUSY
             num_of_original_workers -= 1
+            print("remaining filelist length: ", self.filelist_remaining.qsize())
+            print("num_of_original_workers: ", num_of_original_workers)
         if self.filelist_remaining.empty():
             self.exeJobState = 'MAPPING_END'
 
@@ -323,14 +339,17 @@ class Manager:
             sock.connect(
                 (self.workers[pid].worker_host, self.workers[pid].worker_port)
             )
+            print("workers[pid].worker_host: ", self.workers[pid].worker_host)
+            print("workers[pid].worker_port: ", self.workers[pid].worker_port)
             mapping_message = json.dumps({
                 "message_type": "new_worker_task",
                 "input_files": filelist,
                 "executable": executable,
-                "output_directory": output_directory,
+                "output_directory": str(output_directory),
                 "worker_pid": pid
             })
             sock.sendall(mapping_message.encode('utf-8'))
+            print("Send Successfully")
 
 
 @click.command()

@@ -119,25 +119,27 @@ class Worker:
         output_files = []
         for input_directory in input_files:
             input_filename = Path(input_directory).name
-            output_directory = Path(output_directory) / input_filename
+            output_directory = Path(message_dict["output_directory"]) / input_filename
+            print(str(input_directory))
+            print(str(output_directory))
             with open(input_directory, 'r') as infile:
                 outfile = open(str(output_directory), 'w')
                 subprocess.run(
                     executable, stdin=infile, stdout=outfile, check=True
                 )
                 outfile.close()
-            output_files.append(output_directory)
+            output_files.append(str(output_directory))
         self.sendStatusMessage(output_files)
         self.state = WorkerState.READY
     
-    def sendStatusMessage(self, sendStatusMessage):
+    def sendStatusMessage(self, output_directory):
         """Send the status messages to the manager, which means it finishes
         the current task, and ready for the next if there's one."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect(("localhost", self.manager_port))
             status_message = json.dumps({
                 "message_type": "status",
-                "output_files": output_files,
+                "output_files": output_directory,
                 "status": "finished",
                 "worker_pid": self.pid
             })
