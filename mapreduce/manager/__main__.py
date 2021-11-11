@@ -35,7 +35,8 @@ class Manager:
         self.shutdown = False
         self.message_dict = {"message_type": ''}
 
-        self.tmp = self.createFolder()
+        self.tmp = Path('tmp')
+        self.createFolder()
         self.udpHBThread = threading.Thread(
             target=self.listenHBMessage
         )
@@ -52,11 +53,10 @@ class Manager:
 
     def createFolder(self):
         """Create the tmp folder when the class is constructed."""
-        tmp = Path('tmp')
+        tmp = self.tmp
         tmp.mkdir(exist_ok=True)
         for oldJobFolder in tmp.glob('job-*'):
             shutil.rmtree(oldJobFolder)
-        return tmp
 
     def listenHBMessage(self):
         """Listen heartbeat message sent from workers."""
@@ -137,6 +137,7 @@ class Manager:
                     curr_filelist, self.message_dict["mapper_executable"],
                     self.message_dict["output_directory"], first_worker.pid
                 )
+                self.workers[first_worker.pid].state = WorkerState.BUSY
                 if self.filelist_remaining.empty():
                     self.exeJobState = 'MAPPING_END'
         elif self.filelist_remaining.empty() and self.exeJobState != 'FREE':
@@ -171,7 +172,8 @@ class Manager:
         )
 
     def handleNewManagerJob(self, msg_dict):
-        """Handle the new coming job, execute it or put it in the jobQueue."""
+        """Handle the new coming job, execute it or put it in the jobQueue,
+        depending on the the result of checkWorkerServer function."""
         self.createDirectories()
         whether_ready = self.checkWorkerServer()
         self.jobCounter += 1
@@ -195,7 +197,7 @@ class Manager:
             if self.num_list_remaining == 0:
                 logging.info("Manager:%s end map stage", self.port)
                 while not self.readyed_workers.empty():
-                    self.readyed_workers.get()
+                    useless_worker = self.readyed_workers.get()
                 self.getReadyedWorkers()
                 # TODO execute the grouping stage next and change state
                 # self.jobExecution(self.message_dict, "grouping")
@@ -246,8 +248,7 @@ class Manager:
 
     def checkWorkerServer(self):
         """When new job comes, the manager checks whether there's any 
-        avaiable workers, and whether it's ready for execution or it's busy.
-        If no readyed worker or it's busy, put the coming job in jobQueue."""
+        avaiable workers, and whether it's ready for execution or it's busy."""
         whetherAllBusy = True
         for pid, worker in self.workers.items():
             if not (worker.state == WorkerState.BUSY or \
@@ -261,7 +262,7 @@ class Manager:
     
     def checkTaskJobForWorker(self, pid):
         """Check whether there's currently executing task or pending task/job
-        when a new worker registers, if so, assign it the next task/job."""
+        when a new worker registers, if so, put it into the readyed queue."""
         if self.serverState == "EXECUTING" and \
                 not self.filelist_remaining.empty():
             self.readyed_workers.put(self.workers[pid])
@@ -313,7 +314,8 @@ class Manager:
             )
             self.workers[firstWorker.pid].state = WorkerState.BUSY
             num_of_original_workers -= 1
-        #self.exeJobState = 'MAPPING_END'
+        if self.filelist_remaining.empty():
+            self.exeJobState = 'MAPPING_END'
 
     def sendMappingTask(self, filelist, executable, output_directory, pid):
         """Send the mapping task message to the corresponding worker."""
