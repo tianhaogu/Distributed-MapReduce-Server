@@ -90,6 +90,7 @@ class Manager:
 
             while not self.shutdown:
                 self.checkTaskJobAtBeginning()
+                print("After the checkTaskJobAtBeginning function!!!")
                 try:
                     clientsocket, address = sock.accept()
                 except socket.timeout:
@@ -113,6 +114,7 @@ class Manager:
                 except json.JSONDecodeError:
                     print("Error occurs here!!!")
                     continue
+                print("Just before handling the message!!!")
                 print(msg_dict)
                 if msg_dict["message_type"] == "shutdown":
                     self.handleShutdown()
@@ -120,8 +122,8 @@ class Manager:
                     self.handleRegister(msg_dict)
                     self.checkTaskJobForWorker(msg_dict["worker_pid"])
                 elif msg_dict["message_type"] == "new_manager_job":
-                    self.message_dict = msg_dict
                     self.handleNewManagerJob(msg_dict)
+                    print("Assign the first <readyed_workers.qsize()> tasks to the readyed workers")
                 elif msg_dict["message_type"] == "status":
                     print("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
                     self.handleStatus(msg_dict)
@@ -137,9 +139,12 @@ class Manager:
                 print("AA")
                 curr_filelist = self.filelist_remaining.get()
                 first_worker = self.readyed_workers.get()
-                sendMappingTask(
+                job_id = self.message_dict["job_id"]
+                output_directory = \
+                    self.tmp / 'job-{}'.format(job_id) / "mapper-output"
+                self.sendMappingTask(
                     curr_filelist, self.message_dict["mapper_executable"],
-                    self.message_dict["output_directory"], first_worker.pid
+                    output_directory, first_worker.pid
                 )
                 self.workers[first_worker.pid].state = WorkerState.BUSY
                 if self.filelist_remaining.empty():
@@ -157,7 +162,10 @@ class Manager:
                 if not self.readyed_workers.empty():
                     self.serverState = 'EXECUTING'
                     curr_job = self.jobQueue.get()
-                    self.jobExecution(curr_job.message_dict, "mapping")
+                    self.message_dict = curr_job.message_dict
+                    self.jobExecution(
+                        curr_job.message_dict, curr_job.jid, "mapping"
+                    )
         else:
             print("D")
             pass
@@ -184,14 +192,18 @@ class Manager:
         depending on the the result of checkWorkerServer function."""
         self.createDirectories()
         whether_ready = self.checkWorkerServer()
-        self.jobCounter += 1
         if whether_ready:
             self.getReadyedWorkers()
+            job_id = self.jobCounter
+            msg_dict["job_id"] = job_id
+            self.message_dict = msg_dict
+            self.jobCounter += 1
             self.serverState = "EXECUTING"
             print("THis is the get_readyed_workers: ", self.readyed_workers)
-            self.jobExecution(msg_dict, "mapping")
+            self.jobExecution(msg_dict, job_id, "mapping")
         else:
             self.jobQueue.put(Job(self.jobCounter, msg_dict))
+            self.jobCounter += 1
     
     def handleStatus(self, msg_dict):
         """Handle the worker status message, set the task and worker Queue."""
@@ -210,7 +222,7 @@ class Manager:
                     useless_worker = self.readyed_workers.get()
                 self.getReadyedWorkers()
                 # TODO execute the grouping stage next and change state
-                # self.jobExecution(self.message_dict, "grouping")
+                # self.jobExecution(self.message_dict, job_id "grouping")
             else:
                 pass
         else:
@@ -278,12 +290,12 @@ class Manager:
                 not self.filelist_remaining.empty():
             self.readyed_workers.put(self.workers[pid])
 
-    def jobExecution(self, msg_dict, task_signal):
+    def jobExecution(self, msg_dict, job_id, task_signal):
         """Start to execute the mapping task, note only mapping currently."""
         if task_signal == "mapping":
             partitioned_filelist = self.inputPartition(msg_dict)
             print(partitioned_filelist)
-            self.executeMap(msg_dict, partitioned_filelist)
+            self.executeMap(msg_dict, job_id, partitioned_filelist)
         elif task_signal == "grouping":
             pass
             # TODO need to be implemented later for the grouping stage
@@ -308,7 +320,7 @@ class Manager:
             partitioned_filelist[partitioned_index].append(file)
         return partitioned_filelist
 
-    def executeMap(self, msg_dict, partitioned_filelist):
+    def executeMap(self, msg_dict, job_id, partitioned_filelist):
         """Execute the mapping stage, assign mapping tasks to readyed workers
         in registered order. Note that # workers < # tasks."""
         for filelist in partitioned_filelist:
@@ -321,10 +333,12 @@ class Manager:
         while num_of_original_workers > 0:
             curr_filelist = self.filelist_remaining.get()
             firstWorker = self.readyed_workers.get()
+            output_directory = \
+                self.tmp / 'job-{}'.format(job_id) / "mapper-output"
             print("curr_filelist: ", curr_filelist)
             self.sendMappingTask(
                 curr_filelist, msg_dict["mapper_executable"],
-                msg_dict["output_directory"], firstWorker.pid
+                output_directory, firstWorker.pid
             )
             self.workers[firstWorker.pid].state = WorkerState.BUSY
             num_of_original_workers -= 1
@@ -341,10 +355,14 @@ class Manager:
             )
             print("workers[pid].worker_host: ", self.workers[pid].worker_host)
             print("workers[pid].worker_port: ", self.workers[pid].worker_port)
+            print(filelist)
+            print(executable)
+            print(output_directory)
+            print(pid)
             mapping_message = json.dumps({
                 "message_type": "new_worker_task",
                 "input_files": filelist,
-                "executable": executable,
+                "executable": str(executable),
                 "output_directory": str(output_directory),
                 "worker_pid": pid
             })
