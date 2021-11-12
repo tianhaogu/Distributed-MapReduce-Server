@@ -132,14 +132,14 @@ class Worker:
         self.sendStatusMessage(output_files)
         self.state = WorkerState.READY
     
-    def sendStatusMessage(self, output_directory):
+    def sendStatusMessage(self, output_files):
         """Send the status messages to the manager, which means it finishes
         the current task, and ready for the next if there's one."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect(("localhost", self.manager_port))
             status_message = json.dumps({
                 "message_type": "status",
-                "output_files": output_directory,
+                "output_files": output_files,
                 "status": "finished",
                 "worker_pid": self.pid
             })
