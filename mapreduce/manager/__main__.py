@@ -18,7 +18,10 @@ logging.basicConfig(level=logging.DEBUG)
 
 
 class Manager:
+    """Implement all operations of the Manager Module."""
+
     def __init__(self, port, hb_port):
+        """Constructor for member variables, functions and threads."""
         logging.info("Starting manager:%s", port)
         logging.info("Manager:%s PWD %s", port, os.getcwd())
 
@@ -103,6 +106,9 @@ class Manager:
                         try:
                             data = clientsocket.recv(4096)
                         except socket.timeout:
+                            if self.exeJobState == 'GROUPING_TWO':
+                                self.getReadyedWorkers()
+                                self.jobExecution(self.message_dict, "reducing")
                             continue
                         if not data:
                             break
@@ -115,17 +121,7 @@ class Manager:
                 except json.JSONDecodeError:
                     continue
                 print(msg_dict)
-                if msg_dict["message_type"] == "shutdown":
-                    self.handleShutdown()
-                elif msg_dict["message_type"] == "register":
-                    self.handleRegister(msg_dict)
-                    self.checkTaskJobForWorker(msg_dict["worker_pid"])
-                elif msg_dict["message_type"] == "new_manager_job":
-                    self.handleNewManagerJob(msg_dict)
-                elif msg_dict["message_type"] == "status":
-                    self.handleStatus(msg_dict)
-                else:
-                    pass
+                self.handleMessage(msg_dict)
 
     def checkTaskJobAtBeginning(self):
         """Check in-executing tasks and in-queue job at the beginning,
@@ -143,7 +139,10 @@ class Manager:
                 )
                 self.workers[first_worker.pid].state = WorkerState.BUSY
                 if self.filelist_remaining.empty():
-                    self.exeJobState = 'MAPPING_END'
+                    if self.exeJobState == 'MAPPING':
+                        self.exeJobState = 'MAPPING_END'
+                    if self.exeJobState == 'REDUCING':
+                        self.exeJobState = 'REDUCING_END'
         elif self.filelist_remaining.empty() and self.exeJobState != 'FREE':
             pass
         elif not self.jobQueue.empty():
@@ -156,6 +155,20 @@ class Manager:
                     curr_job = self.jobQueue.get()
                     self.message_dict = curr_job.message_dict
                     self.jobExecution(curr_job.message_dict, "mapping")
+        else:
+            pass
+    
+    def handleMessage(self, msg_dict):
+        """Handle any message received in the TCP socket."""
+        if msg_dict["message_type"] == "shutdown":
+            self.handleShutdown()
+        elif msg_dict["message_type"] == "register":
+            self.handleRegister(msg_dict)
+            self.checkTaskJobForWorker(msg_dict["worker_pid"])
+        elif msg_dict["message_type"] == "new_manager_job":
+            self.handleNewManagerJob(msg_dict)
+        elif msg_dict["message_type"] == "status":
+            self.handleStatus(msg_dict)
         else:
             pass
 
@@ -179,12 +192,12 @@ class Manager:
     def handleNewManagerJob(self, msg_dict):
         """Handle the new coming job, execute it or put it in the jobQueue,
         depending on the the result of checkWorkerServer function."""
-        self.createDirectories()
+        job_id = self.jobCounter
+        msg_dict["job_id"] = job_id
+        self.createDirectories(msg_dict)
         whether_ready = self.checkWorkerServer()
         if whether_ready:
             self.getReadyedWorkers()
-            job_id = self.jobCounter
-            msg_dict["job_id"] = job_id
             self.message_dict = msg_dict
             self.jobCounter += 1
             self.serverState = "EXECUTING"
@@ -219,11 +232,24 @@ class Manager:
                 self.getReadyedWorkers()
                 self.jobExecution(self.message_dict, "grouping_two")
                 logging.info("Manager:%s end group stage", self.port)
+                self.jobExecution(self.message_dict, "reducing")
             else:
                 pass  # need to wait for all workers to return sorting messages
+        elif self.exeJobState == 'REDUCING':
+            self.num_list_remaining -= 1
+            if not self.filelist_remaining.empty():
+                self.readyed_workers.put(self.workers[pid])
+        elif self.exeJobState == 'REDUCING_END':
+            self.num_list_remaining -= 1
+            if self.num_list_remaining == 0:
+                logging.info("Manager:%s end reduce stage", self.port)
+                while not self.readyed_workers.empty():
+                    useless_worker = self.readyed_workers.get()
+                self.jobExecution(self.message_dict, "wrapping")
+            else:
+                pass  # all tasks assigned to workers, but not get back all.
         else:
-            pass
-            # TODO following stages
+            logging.info("ERROR! Unknown executing job state!")
 
     def forwardShutdown(self):
         """Forward the shutdown message to all the workers in the Dict."""
@@ -253,16 +279,20 @@ class Manager:
                     worker.state == WorkerState.DEAD):
                 self.readyed_workers.put(worker)
 
-    def createDirectories(self):
+    def createDirectories(self, msg_dict):
         """Create the directory for all input & output when new job comes."""
-        first_layer = self.tmp / 'job-{}'.format(self.jobCounter)
+        first_layer = self.tmp / 'job-{}'.format(msg_dict["job_id"])
         Path.mkdir(first_layer)
         second_layer_mapper = first_layer / 'mapper-output'
         second_layer_grouper = first_layer / 'grouper-output'
         second_layer_reducer = first_layer / 'reducer-output'
+        output_layer_final = Path(msg_dict["output_directory"])
         Path.mkdir(second_layer_mapper)
         Path.mkdir(second_layer_grouper)
         Path.mkdir(second_layer_reducer)
+        Path.mkdir(output_layer_final)
+        #output_layer_final_one = output_layer_final / "outputfile01"
+        #Path.mkdir(output_layer_final_one)
 
     def checkWorkerServer(self):
         """When new job comes, the manager checks whether there's any 
@@ -296,8 +326,10 @@ class Manager:
         elif task_signal == "grouping_two":
             self.executeMerge(msg_dict)
         elif task_signal == "reducing":
-            pass
-            # TODO need to be implemented later for the grouping stage
+            partitioned_filelist = self.reducingPartition(msg_dict)
+            self.executeReduce(msg_dict, partitioned_filelist)
+        elif task_signal == "wrapping":
+            self.executeWrap(msg_dict)
         else:
             pass
 
@@ -332,6 +364,23 @@ class Manager:
         for index in range(len(input_files)):
             partitioned_index = index % min_file_worker
             partitioned_filelist[partitioned_index].append(input_files[index])
+        return partitioned_filelist
+    
+    def reducingPartition(self, msg_dict):
+        """Perform the partition on the reducing files using round robin.
+        Return a list of list of files according to number of reducers."""
+        input_files = []
+        input_directory = \
+            self.tmp / 'job-{}'.format(msg_dict["job_id"]) / "grouper-output"
+        for file in input_directory.glob('reduce*'):
+            input_files.append(str(file))
+        input_files.sort()
+        partitioned_filelist = []
+        for i in range(msg_dict["num_reducers"]):
+            partitioned_filelist.append([])
+        for index, file in enumerate(input_files):
+            partitioned_index = index % msg_dict["num_reducers"]
+            partitioned_filelist[partitioned_index].append(file)
         return partitioned_filelist
 
     def executeMap(self, msg_dict, partitioned_filelist):
@@ -403,6 +452,52 @@ class Manager:
                 reducefile_index = key_counter % num_reducers
                 outlines[reducefile_index].write(line)
                 last_key = key
+
+    def executeReduce(self, msg_dict, partitioned_filelist):
+        """Execute the reducing stage, assign reducing tasks to readyed workers
+        in registered order. Note the # workers < # tasks case."""
+        for filelist in partitioned_filelist:
+            self.filelist_remaining.put(filelist)
+        logging.info("Manager:%s begin reduce stage", self.port)
+        self.exeJobState = 'REDUCING'
+        self.num_list_remaining = len(partitioned_filelist)
+        num_of_original_workers = self.readyed_workers.qsize()
+        while num_of_original_workers > 0:
+            curr_filelist = self.filelist_remaining.get()
+            curr_worker = self.readyed_workers.get()
+            job_id = msg_dict["job_id"]
+            output_directory = \
+                self.tmp / 'job-{}'.format(job_id) / "reducer-output"
+            self.sendMappingTask(
+                curr_filelist, msg_dict["reducer_executable"],
+                output_directory, curr_worker.pid
+            )
+            self.workers[curr_worker.pid].state = WorkerState.BUSY
+            num_of_original_workers -= 1
+        if self.filelist_remaining.empty():
+            self.exeJobState = 'REDUCING_END'
+    
+    def executeWrap(self, msg_dict):
+        """Executing the wrapping stage of manager, loop over the reducer-
+        output and rename the files."""
+        self.exeJobState = 'WRAPPING'
+        job_id = msg_dict["job_id"]
+        input_directory = self.tmp / 'job-{}'.format(job_id) / "reducer-output"
+        output_directory = Path(msg_dict["output_directory"])
+        input_filelist = [str(file) for file in input_directory.glob('*')]
+        output_filelist = \
+            [output_directory / ("outputfile" + str(i + 1).zfill(2))
+             for i in range(len(input_filelist))]
+        logging.info(input_filelist)
+        logging.info(output_filelist)
+        for i in range(len(output_filelist)):
+            if not os.path.exists(output_filelist[i].parent):
+                os.mkdir(output_filelist[i].parent)
+            if not os.path.exists(output_filelist[i]):
+                os.mkdir(output_filelist[i])
+            shutil.move(input_filelist[i], output_filelist[i])
+        self.exeJobState = 'FREE'
+        self.serverState = 'READY'
 
     def sendMappingTask(self, filelist, executable, output_directory, pid):
         """Send the mapping task message to the corresponding worker."""

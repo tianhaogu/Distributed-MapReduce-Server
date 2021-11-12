@@ -15,7 +15,10 @@ logging.basicConfig(level=logging.DEBUG)
 
 
 class Worker:
+    """Implement all operations of the Worker Module."""
+
     def __init__(self, manager_port, manager_hb_port, worker_port):
+        """Constructor for member variables, functions and threads."""
         logging.info("Starting worker:%s", worker_port)
         logging.info("Worker:%s PWD %s", worker_port, os.getcwd())
 
@@ -93,6 +96,13 @@ class Worker:
                         logging.debug(
                             "ERROR! Should not assign task to a non-ready worker!"
                         )
+                elif self.message_dict["message_type"] == "new_sort_task":
+                    if self.registered and self.state == WorkerState.READY:
+                        self.performSorting(self.message_dict)
+                    else:
+                        logging.debug(
+                            "ERROR! Should not assign task to a non-ready worker!"
+                        )
                 else:
                     pass
             if self.udpHBThread.is_alive():
@@ -120,8 +130,6 @@ class Worker:
         for input_directory in input_files:
             input_filename = Path(input_directory).name
             output_directory = Path(message_dict["output_directory"]) / input_filename
-            print(str(input_directory))
-            print(str(output_directory))
             with open(input_directory, 'r') as infile:
                 outfile = open(str(output_directory), 'w')
                 subprocess.run(
@@ -129,17 +137,34 @@ class Worker:
                 )
                 outfile.close()
             output_files.append(str(output_directory))
-        self.sendStatusMessage(output_files)
+        self.sendStatusMessage(output_files, "output_files")
         self.state = WorkerState.READY
     
-    def sendStatusMessage(self, output_files):
+    def performSorting(self, message_dict):
+        """Perform the real sorting, pipe to the output via executable cmd."""
+        self.state = WorkerState.BUSY
+        input_file_list = message_dict["input_files"]
+        output_file = message_dict["output_file"]
+        data = []
+        for input_file in input_file_list:
+            with open(input_file, 'r') as infile:
+                for line in infile:
+                    data.append(line)
+        data.sort()
+        data = "".join(data)
+        with open(output_file, 'w') as outfile:
+            outfile.write(data)
+        self.sendStatusMessage(output_file, "output_file")
+        self.state = WorkerState.READY
+    
+    def sendStatusMessage(self, output_files, output_file_key):
         """Send the status messages to the manager, which means it finishes
         the current task, and ready for the next if there's one."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect(("localhost", self.manager_port))
             status_message = json.dumps({
                 "message_type": "status",
-                "output_files": output_files,
+                output_file_key: output_files,
                 "status": "finished",
                 "worker_pid": self.pid
             })
