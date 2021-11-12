@@ -106,9 +106,6 @@ class Manager:
                         try:
                             data = clientsocket.recv(4096)
                         except socket.timeout:
-                            if self.exeJobState == 'GROUPING_TWO':
-                                self.getReadyedWorkers()
-                                self.jobExecution(self.message_dict, "reducing")
                             continue
                         if not data:
                             break
@@ -148,7 +145,7 @@ class Manager:
         elif not self.jobQueue.empty():
             if self.serverState == 'READY':
                 while not self.readyed_workers.empty():
-                    self.readyed_workers.get()
+                    useless_worker = self.readyed_workers.get()
                 self.getReadyedWorkers()
                 if not self.readyed_workers.empty():
                     self.serverState = 'EXECUTING'
@@ -291,8 +288,6 @@ class Manager:
         Path.mkdir(second_layer_grouper)
         Path.mkdir(second_layer_reducer)
         Path.mkdir(output_layer_final)
-        #output_layer_final_one = output_layer_final / "outputfile01"
-        #Path.mkdir(output_layer_final_one)
 
     def checkWorkerServer(self):
         """When new job comes, the manager checks whether there's any 
@@ -393,17 +388,20 @@ class Manager:
         self.num_list_remaining = len(partitioned_filelist)
         num_of_original_workers = self.readyed_workers.qsize()
         while num_of_original_workers > 0:
-            curr_filelist = self.filelist_remaining.get()
-            firstWorker = self.readyed_workers.get()
-            job_id = msg_dict["job_id"]
-            output_directory = \
-                self.tmp / 'job-{}'.format(job_id) / "mapper-output"
-            self.sendMappingTask(
-                curr_filelist, msg_dict["mapper_executable"],
-                output_directory, firstWorker.pid
-            )
-            self.workers[firstWorker.pid].state = WorkerState.BUSY
-            num_of_original_workers -= 1
+            if not self.filelist_remaining.empty():
+                curr_filelist = self.filelist_remaining.get()
+                firstWorker = self.readyed_workers.get()
+                job_id = msg_dict["job_id"]
+                output_directory = \
+                    self.tmp / 'job-{}'.format(job_id) / "mapper-output"
+                self.sendMappingTask(
+                    curr_filelist, msg_dict["mapper_executable"],
+                    output_directory, firstWorker.pid
+                )
+                self.workers[firstWorker.pid].state = WorkerState.BUSY
+                num_of_original_workers -= 1
+            else:
+                break
         if self.filelist_remaining.empty():
             self.exeJobState = 'MAPPING_END'
     
@@ -463,17 +461,20 @@ class Manager:
         self.num_list_remaining = len(partitioned_filelist)
         num_of_original_workers = self.readyed_workers.qsize()
         while num_of_original_workers > 0:
-            curr_filelist = self.filelist_remaining.get()
-            curr_worker = self.readyed_workers.get()
-            job_id = msg_dict["job_id"]
-            output_directory = \
-                self.tmp / 'job-{}'.format(job_id) / "reducer-output"
-            self.sendMappingTask(
-                curr_filelist, msg_dict["reducer_executable"],
-                output_directory, curr_worker.pid
-            )
-            self.workers[curr_worker.pid].state = WorkerState.BUSY
-            num_of_original_workers -= 1
+            if not self.filelist_remaining.empty():
+                curr_filelist = self.filelist_remaining.get()
+                curr_worker = self.readyed_workers.get()
+                job_id = msg_dict["job_id"]
+                output_directory = \
+                    self.tmp / 'job-{}'.format(job_id) / "reducer-output"
+                self.sendMappingTask(
+                    curr_filelist, msg_dict["reducer_executable"],
+                    output_directory, curr_worker.pid
+                )
+                self.workers[curr_worker.pid].state = WorkerState.BUSY
+                num_of_original_workers -= 1
+            else:
+                break
         if self.filelist_remaining.empty():
             self.exeJobState = 'REDUCING_END'
     
@@ -488,13 +489,9 @@ class Manager:
         output_filelist = \
             [output_directory / ("outputfile" + str(i + 1).zfill(2))
              for i in range(len(input_filelist))]
-        logging.info(input_filelist)
-        logging.info(output_filelist)
         for i in range(len(output_filelist)):
             if not os.path.exists(output_filelist[i].parent):
                 os.mkdir(output_filelist[i].parent)
-            if not os.path.exists(output_filelist[i]):
-                os.mkdir(output_filelist[i])
             shutil.move(input_filelist[i], output_filelist[i])
         self.exeJobState = 'FREE'
         self.serverState = 'READY'
