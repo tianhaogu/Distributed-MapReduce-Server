@@ -5,11 +5,11 @@ import socket
 import logging
 import json
 import time
-import click
 from pathlib import Path
 import subprocess
+import click
 import mapreduce.utils
-from mapreduce.helper import WorkerState, WorkerInDict, Job
+from mapreduce.helper import WorkerState
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -30,14 +30,14 @@ class Worker:
         self.registered = False
         self.message_dict = {"message_type": ''}
         self.pid = os.getpid()
-        self.udpHBThread = threading.Thread(
-            target=self.sendHBMessage
+        self.udp_hb_thread = threading.Thread(
+            target=self.send_hb_message
         )
-        self.listenIncomingMsg()
+        self.listen_incoming_msg()
 
-        # self.udpHBThread.join()
+        # self.udp_hb_thread.join()
 
-    def sendHBMessage(self):
+    def send_hb_message(self):
         """Send heartbeat message back to the manager after it registers."""
         while not self.shutdown:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -48,7 +48,7 @@ class Worker:
                 sock.sendall(message.encode('utf-8'))
             time.sleep(2)
 
-    def listenIncomingMsg(self):
+    def listen_incoming_msg(self):
         """Listen to incoming messages such as ack, task from the manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -58,7 +58,7 @@ class Worker:
 
             while not self.shutdown:
                 if not self.registered:
-                    self.sendRegistration()
+                    self.send_registration()
                 try:
                     clientsocket, address = sock.accept()
                 except socket.timeout:
@@ -86,29 +86,29 @@ class Worker:
                 if self.message_dict["message_type"] == "shutdown":
                     self.shutdown = True
                 elif self.message_dict["message_type"] == "register_ack":
-                    self.udpHBThread.start()
+                    self.udp_hb_thread.start()
                     self.registered = True
                     self.state = WorkerState.READY
                 elif self.message_dict["message_type"] == "new_worker_task":
                     if self.registered and self.state == WorkerState.READY:
-                        self.performMapping(self.message_dict)
+                        self.perform_mapping(self.message_dict)
                     else:
                         logging.debug(
                             "ERROR! Do Not assign task to a non-ready worker!"
                         )
                 elif self.message_dict["message_type"] == "new_sort_task":
                     if self.registered and self.state == WorkerState.READY:
-                        self.performSorting(self.message_dict)
+                        self.perform_sorting(self.message_dict)
                     else:
                         logging.debug(
                             "ERROR! Do not assign task to a non-ready worker!"
                         )
                 else:
                     pass
-            if self.udpHBThread.is_alive():
-                self.udpHBThread.join()
+            if self.udp_hb_thread.is_alive():
+                self.udp_hb_thread.join()
 
-    def sendRegistration(self):
+    def send_registration(self):
         """Send the registration message to the manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect(("localhost", self.manager_port))
@@ -120,7 +120,7 @@ class Worker:
             })
             sock.sendall(rgst_message.encode('utf-8'))
 
-    def performMapping(self, message_dict):
+    def perform_mapping(self, message_dict):
         """Perform the real mapping, pipe to the output via executable cmd."""
         self.state = WorkerState.BUSY
         input_files = message_dict["input_files"]  # a list of strings
@@ -138,10 +138,10 @@ class Worker:
                 )
                 outfile.close()
             output_files.append(str(output_directory))
-        self.sendStatusMessage(output_files, "output_files")
+        self.send_status_message(output_files, "output_files")
         self.state = WorkerState.READY
 
-    def performSorting(self, message_dict):
+    def perform_sorting(self, message_dict):
         """Perform the real sorting, pipe to the output via executable cmd."""
         self.state = WorkerState.BUSY
         input_file_list = message_dict["input_files"]
@@ -155,12 +155,11 @@ class Worker:
         data = "".join(data)
         with open(output_file, 'w') as outfile:
             outfile.write(data)
-        self.sendStatusMessage(output_file, "output_file")
+        self.send_status_message(output_file, "output_file")
         self.state = WorkerState.READY
 
-    def sendStatusMessage(self, output_files, output_file_key):
-        """Send the status messages to the manager, which means it finishes
-        the current task, and ready for the next if there's one."""
+    def send_status_message(self, output_files, output_file_key):
+        """Send the status messages to the manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect(("localhost", self.manager_port))
             status_message = json.dumps({
