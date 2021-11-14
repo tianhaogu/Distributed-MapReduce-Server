@@ -40,7 +40,6 @@ class Manager:
         self.server_state = 'READY'
         self.task_state = 'FREE'
         self.readyed_workers = Queue()
-        # self.dead_worker_busy = []
         self.filelist_remaining = Queue()
         self.num_list_remaining = 0
 
@@ -175,13 +174,11 @@ class Manager:
             pass
         elif not self.job_queue.empty():
             if self.server_state == 'READY':
-                # self.readyed_workers.queue.clear()
                 self._get_readyed_workers()
                 if not self.readyed_workers.empty():
                     self.server_state = 'EXECUTING'
                     curr_job = self.job_queue.get()
                     self.message_dict = curr_job.message_dict
-                    # self.dead_worker_busy.clear()
                     self._job_execution(curr_job.message_dict, "mapping")
         else:
             pass
@@ -190,7 +187,6 @@ class Manager:
         """Handle next step when finding the dead worker was busy before."""
         curr_task = worker.access_curr_task()
         self.filelist_remaining.put(curr_task)
-        # self.dead_worker_busy.append(curr_task)
         whether_find = False
         while not whether_find:
             self._get_readyed_workers()
@@ -240,7 +236,6 @@ class Manager:
             self.message_dict = msg_dict
             self.job_counter += 1
             self.server_state = "EXECUTING"
-            # self.dead_worker_busy.clear()
             self._job_execution(msg_dict, "mapping")  # start of job, only map
         else:
             self.job_queue.put(Job(self.job_counter, msg_dict))
@@ -258,19 +253,14 @@ class Manager:
             self.num_list_remaining -= 1
             if self.num_list_remaining == 0:
                 logging.info("Manager:%s end map stage", self.port)
-                # self.readyed_workers.queue.clear()
                 self._get_readyed_workers()
-                # self.dead_worker_busy.clear()
                 self._job_execution(self.message_dict, "grouping_one")
         elif self.task_state == 'GROUPING_ONE':
             self.num_list_remaining -= 1
             if self.num_list_remaining == 0:
-                # self.readyed_workers.queue.clear()
                 self._get_readyed_workers()
-                # self.dead_worker_busy.clear()
                 self._job_execution(self.message_dict, "grouping_two")
                 logging.info("Manager:%s end group stage", self.port)
-                # self.dead_worker_busy.clear()
                 self._job_execution(self.message_dict, "reducing")
         elif self.task_state == 'REDUCING':
             self.num_list_remaining -= 1
@@ -281,7 +271,6 @@ class Manager:
             if self.num_list_remaining == 0:
                 logging.info("Manager:%s end reduce stage", self.port)
                 self.readyed_workers.queue.clear()
-                # self.dead_worker_busy.clear()
                 self._job_execution(self.message_dict, "wrapping")
         else:
             logging.info("ERROR! Unknown executing job state!")
@@ -443,9 +432,9 @@ class Manager:
         key_counter = 0
         last_key = ''
         with ExitStack() as stack:
-            inlines = [stack.enter_context(open(fname, 'r'))
+            inlines = [stack.enter_context(open(fname, 'r', encoding='utf-8'))
                        for fname in input_filelist]
-            outlines = [stack.enter_context(open(fname, 'w'))
+            outlines = [stack.enter_context(open(fname, 'w', encoding='utf-8'))
                         for fname in output_filelist]
             for index, line in enumerate(heapq.merge(*inlines)):
                 key = line.split('\t')[0]

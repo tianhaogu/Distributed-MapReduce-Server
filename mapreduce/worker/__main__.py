@@ -145,8 +145,8 @@ class Worker:
             input_filename = Path(input_directory).name
             output_directory = \
                 Path(message_dict["output_directory"]) / input_filename
-            with open(input_directory, 'r') as infile:
-                with open(output_directory, 'w') as outfile:
+            with open(input_directory, 'r', encoding='utf-8') as infile:
+                with open(output_directory, 'w', encoding='utf-8') as outfile:
                     subprocess.run(
                         executable, stdin=infile, stdout=outfile, check=True
                     )
@@ -161,12 +161,12 @@ class Worker:
         output_file = message_dict["output_file"]
         data = []
         for input_file in input_file_list:
-            with open(input_file, 'r') as infile:
+            with open(input_file, 'r', encoding='utf-8') as infile:
                 for line in infile:
                     data.append(line)
         data.sort()
         data = "".join(data)
-        with open(output_file, 'w') as outfile:
+        with open(output_file, 'w', encoding='utf-8') as outfile:
             outfile.write(data)
         self.send_status_message(output_file, "output_file")
         self.state = WorkerState.READY
