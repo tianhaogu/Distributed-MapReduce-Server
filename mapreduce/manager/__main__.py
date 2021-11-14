@@ -11,8 +11,7 @@ from pathlib import Path
 from queue import Queue
 from contextlib import ExitStack
 import click
-import mapreduce.utils
-from mapreduce.helper import WorkerState, WorkerInDict, Job
+from mapreduce.utils import WorkerState, WorkerInDict, Job
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -80,7 +79,7 @@ class Manager:
                     msg_dict = json.loads(message_str)
                 except json.JSONDecodeError:
                     continue
-                print(msg_dict)
+                logging.debug(msg_dict)
                 pid = msg_dict["worker_pid"]
                 if pid in self.workers:
                     self.workers[pid].last_hb_time = time.time()
@@ -145,7 +144,7 @@ class Manager:
                     msg_dict = json.loads(message_str)
                 except json.JSONDecodeError:
                     continue
-                print(msg_dict)
+                logging.debug(msg_dict)
                 self.handle_incoming_message(msg_dict)
 
     def check_taskjob_at_beginning(self):
@@ -290,7 +289,7 @@ class Manager:
 
     def forward_shutdown(self):
         """Forward the shutdown message to all the workers in the Dict."""
-        for pid, worker in self.workers.items():
+        for worker in self.workers.values():
             if worker.state != WorkerState.DEAD:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.connect((worker.worker_host, worker.worker_port))
@@ -313,7 +312,7 @@ class Manager:
     def get_readyed_workers(self):
         """Get non-busy or dead workers at the beginning of all 3 stages."""
         self.readyed_workers.queue.clear()
-        for pid, worker in self.workers.items():
+        for worker in self.workers.values():
             if worker.state not in (WorkerState.BUSY, WorkerState.DEAD):
                 self.readyed_workers.put(worker)
 
@@ -334,7 +333,7 @@ class Manager:
     def check_worker_server(self):
         """Check avaiable workers and whether server is ready for execution."""
         whether_all_busy = True
-        for pid, worker in self.workers.items():
+        for worker in self.workers.values():
             if worker.state not in (WorkerState.BUSY, WorkerState.DEAD):
                 whether_all_busy = False
                 break
@@ -373,7 +372,7 @@ class Manager:
             input_filelist.append(str(file))
         input_filelist.sort()
         partitioned_filelist = []
-        for i in range(msg_dict["num_mappers"]):
+        for _ in range(msg_dict["num_mappers"]):
             partitioned_filelist.append([])
         for index, file in enumerate(input_filelist):
             partitioned_index = index % msg_dict["num_mappers"]
@@ -390,11 +389,11 @@ class Manager:
         input_files.sort()
         partitioned_filelist = []
         min_file_worker = min(len(input_files), self.readyed_workers.qsize())
-        for i in range(min_file_worker):
+        for _ in range(min_file_worker):
             partitioned_filelist.append([])
-        for index in range(len(input_files)):
+        for index, input_file in enumerate(input_files):
             partitioned_index = index % min_file_worker
-            partitioned_filelist[partitioned_index].append(input_files[index])
+            partitioned_filelist[partitioned_index].append(input_file)
         return partitioned_filelist
 
     def reducing_partition(self, msg_dict):
@@ -406,7 +405,7 @@ class Manager:
             input_files.append(str(file))
         input_files.sort()
         partitioned_filelist = []
-        for i in range(msg_dict["num_reducers"]):
+        for _ in range(msg_dict["num_reducers"]):
             partitioned_filelist.append([])
         for index, file in enumerate(input_files):
             partitioned_index = index % msg_dict["num_reducers"]
@@ -522,10 +521,10 @@ class Manager:
         output_filelist = \
             [output_directory / ("outputfile" + str(i + 1).zfill(2))
              for i in range(len(input_filelist))]
-        for i in range(len(output_filelist)):
-            if not os.path.exists(output_filelist[i].parent):
-                os.mkdir(output_filelist[i].parent)
-            shutil.move(input_filelist[i], output_filelist[i])
+        for index, output_file in enumerate(output_filelist):
+            if not os.path.exists(output_file.parent):
+                os.mkdir(output_file.parent)
+            shutil.move(input_filelist[index], output_file)
         self.task_state = 'FREE'
         self.server_state = 'READY'
 
@@ -543,7 +542,7 @@ class Manager:
                 "worker_pid": pid
             })
             sock.sendall(mapping_message.encode('utf-8'))
-            print(mapping_message)
+            logging.debug(mapping_message)
 
     def send_grouping_task(self, filelist, output_file, pid):
         """Send the grouping(sorting) task to the corresponding worker."""
@@ -558,7 +557,7 @@ class Manager:
                 "worker_pid": pid
             })
             sock.sendall(grouping_message.encode('utf-8'))
-            print(grouping_message)
+            logging.debug(grouping_message)
 
 
 @click.command()

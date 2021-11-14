@@ -8,8 +8,7 @@ import time
 from pathlib import Path
 import subprocess
 import click
-import mapreduce.utils
-from mapreduce.helper import WorkerState
+from mapreduce.utils import WorkerState
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -81,7 +80,7 @@ class Worker:
                     msg_dict = json.loads(message_str)
                 except json.JSONDecodeError:
                     continue
-                print(msg_dict)
+                logging.debug(msg_dict)
                 self.message_dict = msg_dict
                 if self.message_dict["message_type"] == "shutdown":
                     self.shutdown = True
