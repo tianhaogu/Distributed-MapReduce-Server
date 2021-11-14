@@ -1,3 +1,4 @@
+"""Implement the Worker class."""
 import os
 import threading
 import socket
@@ -10,7 +11,6 @@ import subprocess
 import mapreduce.utils
 from mapreduce.helper import WorkerState, WorkerInDict, Job
 
-
 logging.basicConfig(level=logging.DEBUG)
 
 
@@ -18,7 +18,7 @@ class Worker:
     """Implement all operations of the Worker Module."""
 
     def __init__(self, manager_port, manager_hb_port, worker_port):
-        """Constructor for member variables, functions and threads."""
+        """Construct member variables, functions and threads."""
         logging.info("Starting worker:%s", worker_port)
         logging.info("Worker:%s PWD %s", worker_port, os.getcwd())
 
@@ -35,8 +35,8 @@ class Worker:
         )
         self.listenIncomingMsg()
 
-        #self.udpHBThread.join()
-    
+        # self.udpHBThread.join()
+
     def sendHBMessage(self):
         """Send heartbeat message back to the manager after it registers."""
         while not self.shutdown:
@@ -47,7 +47,7 @@ class Worker:
                 )
                 sock.sendall(message.encode('utf-8'))
             time.sleep(2)
-    
+
     def listenIncomingMsg(self):
         """Listen to incoming messages such as ack, task from the manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -94,20 +94,20 @@ class Worker:
                         self.performMapping(self.message_dict)
                     else:
                         logging.debug(
-                            "ERROR! Should not assign task to a non-ready worker!"
+                            "ERROR! Do Not assign task to a non-ready worker!"
                         )
                 elif self.message_dict["message_type"] == "new_sort_task":
                     if self.registered and self.state == WorkerState.READY:
                         self.performSorting(self.message_dict)
                     else:
                         logging.debug(
-                            "ERROR! Should not assign task to a non-ready worker!"
+                            "ERROR! Do not assign task to a non-ready worker!"
                         )
                 else:
                     pass
             if self.udpHBThread.is_alive():
                 self.udpHBThread.join()
-    
+
     def sendRegistration(self):
         """Send the registration message to the manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -119,17 +119,18 @@ class Worker:
                 "worker_pid": self.pid
             })
             sock.sendall(rgst_message.encode('utf-8'))
-    
+
     def performMapping(self, message_dict):
         """Perform the real mapping, pipe to the output via executable cmd."""
         self.state = WorkerState.BUSY
-        input_files = message_dict["input_files"] # a list of strings
+        input_files = message_dict["input_files"]  # a list of strings
         executable = message_dict["executable"]
         output_directory = message_dict["output_directory"]
         output_files = []
         for input_directory in input_files:
             input_filename = Path(input_directory).name
-            output_directory = Path(message_dict["output_directory"]) / input_filename
+            output_directory = \
+                Path(message_dict["output_directory"]) / input_filename
             with open(input_directory, 'r') as infile:
                 outfile = open(str(output_directory), 'w')
                 subprocess.run(
@@ -139,7 +140,7 @@ class Worker:
             output_files.append(str(output_directory))
         self.sendStatusMessage(output_files, "output_files")
         self.state = WorkerState.READY
-    
+
     def performSorting(self, message_dict):
         """Perform the real sorting, pipe to the output via executable cmd."""
         self.state = WorkerState.BUSY
@@ -156,7 +157,7 @@ class Worker:
             outfile.write(data)
         self.sendStatusMessage(output_file, "output_file")
         self.state = WorkerState.READY
-    
+
     def sendStatusMessage(self, output_files, output_file_key):
         """Send the status messages to the manager, which means it finishes
         the current task, and ready for the next if there's one."""
@@ -176,6 +177,7 @@ class Worker:
 @click.argument("manager_hb_port", nargs=1, type=int)
 @click.argument("worker_port", nargs=1, type=int)
 def main(manager_port, manager_hb_port, worker_port):
+    """Begin the Worker Module."""
     Worker(manager_port, manager_hb_port, worker_port)
 
 

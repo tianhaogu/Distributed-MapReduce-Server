@@ -1,18 +1,18 @@
+"""Implement the Manager class."""
 import os
 import threading
 import socket
 import logging
 import json
 import time
-import click
 import shutil
 import heapq
 from pathlib import Path
 from queue import Queue
+from contextlib import ExitStack
+import click
 import mapreduce.utils
 from mapreduce.helper import WorkerState, WorkerInDict, Job
-from contextlib import ExitStack
-
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -21,7 +21,7 @@ class Manager:
     """Implement all operations of the Manager Module."""
 
     def __init__(self, port, hb_port):
-        """Constructor for member variables, functions and threads."""
+        """Construct member variables, functions and threads."""
         logging.info("Starting manager:%s", port)
         logging.info("Manager:%s PWD %s", port, os.getcwd())
 
@@ -34,6 +34,7 @@ class Manager:
         self.serverState = 'READY'
         self.exeJobState = 'FREE'
         self.readyed_workers = Queue()
+        self.dead_worker_busy = {}
         self.filelist_remaining = Queue()
         self.num_list_remaining = 0
 
@@ -50,7 +51,7 @@ class Manager:
             target=self.faultTolerance
         )
         self.faultTolThread.start()
-        self.listenIncomingMsg()
+        self.listenIncomingMessage()
 
         self.forwardShutdown()
         self.faultTolThread.join()
@@ -80,11 +81,27 @@ class Manager:
                 except json.JSONDecodeError:
                     continue
                 print(msg_dict)
+                pid = msg_dict["worker_pid"]
+                if pid in self.workers:
+                    self.workers[pid].last_hb_time = time.time()
+                print("Receive heartbeat message from Worker[%s]", pid)
 
     def faultTolerance(self):
-        return
+        """Handle fault tolerance."""
+        while not self.shutdown:
+            for pid, worker in self.workers.items():
+                if self.workers[pid].state != WorkerState.DEAD:
+                    if (time.time() - worker.last_hb_time) > 10:
+                        prev_state = self.workers[pid].state
+                        self.workers[pid].state = WorkerState.DEAD
+                        print("Worker[%s] is dead!", pid)
+                        if prev_state == WorkerState.BUSY:
+                            curr_task = worker.access_curr_task()
+                            self.filelist_remaining.put(curr_task)
+                            self.dead_worker_busy[pid] = curr_task
+            # time.sleep(0.1)
 
-    def listenIncomingMsg(self):
+    def listenIncomingMessage(self):
         """Listen to incoming messages from workers and the command line.
         Seems as the main thread of this program."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -108,6 +125,11 @@ class Manager:
                         except socket.timeout:
                             continue
                         if not data:
+                            if len(self.dead_worker_busy) != 0:
+                                print("Detect dead worker!!!!!!!!!!!!!!!!!!!!")
+                                self.getReadyedWorkers()
+                                self.checkTaskJobAtBeginning()
+                                self.dead_worker_busy.clear()
                             break
                         message_chunks.append(data)
                 message_bytes = b''.join(message_chunks)
@@ -118,10 +140,10 @@ class Manager:
                 except json.JSONDecodeError:
                     continue
                 print(msg_dict)
-                self.handleMessage(msg_dict)
+                self.handleIncomingMessage(msg_dict)
 
     def checkTaskJobAtBeginning(self):
-        """Check in-executing tasks and in-queue job at the beginning,
+        """Check in-executing tasks and in-queue job at the beginning and
         assign corresponding task/job to the worker if necessary."""
         if not self.filelist_remaining.empty():
             if not self.readyed_workers.empty():
@@ -135,6 +157,7 @@ class Manager:
                     output_directory, first_worker.pid
                 )
                 self.workers[first_worker.pid].state = WorkerState.BUSY
+                self.workers[first_worker.pid].modify_curr_task(curr_filelist)
                 if self.filelist_remaining.empty():
                     if self.exeJobState == 'MAPPING':
                         self.exeJobState = 'MAPPING_END'
@@ -151,11 +174,12 @@ class Manager:
                     self.serverState = 'EXECUTING'
                     curr_job = self.jobQueue.get()
                     self.message_dict = curr_job.message_dict
+                    self.dead_worker_busy.clear()
                     self.jobExecution(curr_job.message_dict, "mapping")
         else:
             pass
-    
-    def handleMessage(self, msg_dict):
+
+    def handleIncomingMessage(self, msg_dict):
         """Handle any message received in the TCP socket."""
         if msg_dict["message_type"] == "shutdown":
             self.handleShutdown()
@@ -172,7 +196,7 @@ class Manager:
     def handleShutdown(self):
         """Shutdown the manager and consequently shutdown all workers."""
         self.shutdown = True
-        #self.forwardShutdown()
+        # self.forwardShutdown()
 
     def handleRegister(self, msg_dict):
         """Register the worker, send ack message and put it into the Dict."""
@@ -187,7 +211,7 @@ class Manager:
         )
 
     def handleNewManagerJob(self, msg_dict):
-        """Handle the new coming job, execute it or put it in the jobQueue,
+        """Handle the new coming job, execute it or put it in the jobQueue
         depending on the the result of checkWorkerServer function."""
         job_id = self.jobCounter
         msg_dict["job_id"] = job_id
@@ -198,11 +222,12 @@ class Manager:
             self.message_dict = msg_dict
             self.jobCounter += 1
             self.serverState = "EXECUTING"
+            self.dead_worker_busy.clear()
             self.jobExecution(msg_dict, "mapping")  # start of job, only map
         else:
             self.jobQueue.put(Job(self.jobCounter, msg_dict))
             self.jobCounter += 1
-    
+
     def handleStatus(self, msg_dict):
         """Handle the worker status message, set the task and worker Queue."""
         pid = msg_dict["worker_pid"]
@@ -215,20 +240,21 @@ class Manager:
             self.num_list_remaining -= 1
             if self.num_list_remaining == 0:
                 logging.info("Manager:%s end map stage", self.port)
-                while not self.readyed_workers.empty():
-                    useless_worker = self.readyed_workers.get()
+                self.readyed_workers.queue.clear()
                 self.getReadyedWorkers()
+                self.dead_worker_busy.clear()
                 self.jobExecution(self.message_dict, "grouping_one")
             else:
                 pass  # all tasks assigned to workers, but not get back all.
         elif self.exeJobState == 'GROUPING_ONE':
             self.num_list_remaining -= 1
             if self.num_list_remaining == 0:
-                while not self.readyed_workers.empty():
-                    useless_worker = self.readyed_workers.get()
+                self.readyed_workers.queue.clear()
                 self.getReadyedWorkers()
+                self.dead_worker_busy.clear()
                 self.jobExecution(self.message_dict, "grouping_two")
                 logging.info("Manager:%s end group stage", self.port)
+                self.dead_worker_busy.clear()
                 self.jobExecution(self.message_dict, "reducing")
             else:
                 pass  # need to wait for all workers to return sorting messages
@@ -240,8 +266,8 @@ class Manager:
             self.num_list_remaining -= 1
             if self.num_list_remaining == 0:
                 logging.info("Manager:%s end reduce stage", self.port)
-                while not self.readyed_workers.empty():
-                    useless_worker = self.readyed_workers.get()
+                self.readyed_workers.queue.clear()
+                self.dead_worker_busy.clear()
                 self.jobExecution(self.message_dict, "wrapping")
             else:
                 pass  # all tasks assigned to workers, but not get back all.
@@ -251,10 +277,11 @@ class Manager:
     def forwardShutdown(self):
         """Forward the shutdown message to all the workers in the Dict."""
         for pid, worker in self.workers.items():
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.connect((worker.worker_host, worker.worker_port))
-                shutdown_message = json.dumps({"message_type": "shutdown"})
-                sock.sendall(shutdown_message.encode('utf-8'))
+            if worker.state != WorkerState.DEAD:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.connect((worker.worker_host, worker.worker_port))
+                    shutdown_message = json.dumps({"message_type": "shutdown"})
+                    sock.sendall(shutdown_message.encode('utf-8'))
         self.shutdown = True
 
     def forwardAckRegistration(self, worker_host, worker_port, worker_pid):
@@ -265,14 +292,14 @@ class Manager:
                 "message_type": "register_ack",
                 "worker_host": worker_host,
                 "worker_port": worker_port,
-                "worker_pid" : worker_pid
+                "worker_pid": worker_pid
             })
             sock.sendall(ack_message.encode('utf-8'))
-    
+
     def getReadyedWorkers(self):
         """Get non-busy or dead workers at the beginning of all 3 stages."""
         for pid, worker in self.workers.items():
-            if not (worker.state == WorkerState.BUSY or \
+            if not (worker.state == WorkerState.BUSY or
                     worker.state == WorkerState.DEAD):
                 self.readyed_workers.put(worker)
 
@@ -290,11 +317,11 @@ class Manager:
         Path.mkdir(output_layer_final)
 
     def checkWorkerServer(self):
-        """When new job comes, the manager checks whether there's any 
-        avaiable workers, and whether it's ready for execution or it's busy."""
+        """When new job comes, the manager checks whether there's any avaiable
+        workers, and whether it's ready for execution or it's busy."""
         whetherAllBusy = True
         for pid, worker in self.workers.items():
-            if not (worker.state == WorkerState.BUSY or \
+            if not (worker.state == WorkerState.BUSY or
                     worker.state == WorkerState.DEAD):
                 whetherAllBusy = False
                 break
@@ -302,7 +329,7 @@ class Manager:
             return False
         else:
             return True
-    
+
     def checkTaskJobForWorker(self, pid):
         """Check whether there's currently executing task or pending task/job
         when a new worker registers, if so, put it into the readyed queue."""
@@ -360,7 +387,7 @@ class Manager:
             partitioned_index = index % min_file_worker
             partitioned_filelist[partitioned_index].append(input_files[index])
         return partitioned_filelist
-    
+
     def reducingPartition(self, msg_dict):
         """Perform the partition on the reducing files using round robin.
         Return a list of list of files according to number of reducers."""
@@ -399,12 +426,13 @@ class Manager:
                     output_directory, firstWorker.pid
                 )
                 self.workers[firstWorker.pid].state = WorkerState.BUSY
+                self.workers[firstWorker.pid].modify_curr_task(curr_filelist)
                 num_of_original_workers -= 1
             else:
                 break
         if self.filelist_remaining.empty():
             self.exeJobState = 'MAPPING_END'
-    
+
     def executeGroup(self, msg_dict, partitioned_filelist):
         """Execute the grouping stage, assign all grouping(sorting) tasks to
         readyed workers in registeration order in one time."""
@@ -421,7 +449,8 @@ class Manager:
                 filelist, output_file, curr_worker.pid
             )
             self.workers[curr_worker.pid].state = WorkerState.BUSY
-    
+            self.workers[curr_worker.pid].modify_curr_task(filelist)
+
     def executeMerge(self, msg_dict):
         """Use heapq to merge sort all lines in all files, then perform robin
         round to merge lines to reduces, with the same key in the same file."""
@@ -437,7 +466,7 @@ class Manager:
         key_counter = 0
         last_key = ''
         with ExitStack() as stack:
-            inlines = [stack.enter_context(open(fname, 'r')) 
+            inlines = [stack.enter_context(open(fname, 'r'))
                        for fname in input_filelist]
             outlines = [stack.enter_context(open(fname, 'w'))
                         for fname in output_filelist]
@@ -472,15 +501,16 @@ class Manager:
                     output_directory, curr_worker.pid
                 )
                 self.workers[curr_worker.pid].state = WorkerState.BUSY
+                self.workers[curr_worker.pid].modify_curr_task(curr_filelist)
                 num_of_original_workers -= 1
             else:
                 break
         if self.filelist_remaining.empty():
             self.exeJobState = 'REDUCING_END'
-    
+
     def executeWrap(self, msg_dict):
-        """Executing the wrapping stage of manager, loop over the reducer-
-        output and rename the files."""
+        """Executing the wrapping stage of manager, loop over reducer-output
+        and rename the files."""
         self.exeJobState = 'WRAPPING'
         job_id = msg_dict["job_id"]
         input_directory = self.tmp / 'job-{}'.format(job_id) / "reducer-output"
@@ -510,7 +540,8 @@ class Manager:
                 "worker_pid": pid
             })
             sock.sendall(mapping_message.encode('utf-8'))
-    
+            print(mapping_message)
+
     def sendGroupingTask(self, filelist, output_file, pid):
         """Send the grouping(sorting) task to the corresponding worker."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -524,12 +555,14 @@ class Manager:
                 "worker_pid": pid
             })
             sock.sendall(grouping_message.encode('utf-8'))
+            print(grouping_message)
 
 
 @click.command()
 @click.argument("port", nargs=1, type=int)
 @click.argument("hb_port", nargs=1, type=int)
 def main(port, hb_port):
+    """Begin the Manager Module."""
     Manager(port, hb_port)
 
 
