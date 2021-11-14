@@ -34,7 +34,7 @@ class Manager:
         self.serverState = 'READY'
         self.exeJobState = 'FREE'
         self.readyed_workers = Queue()
-        self.dead_worker_busy = {}
+        self.dead_worker_busy = []
         self.filelist_remaining = Queue()
         self.num_list_remaining = 0
 
@@ -98,7 +98,7 @@ class Manager:
                         if prev_state == WorkerState.BUSY:
                             curr_task = worker.access_curr_task()
                             self.filelist_remaining.put(curr_task)
-                            self.dead_worker_busy[pid] = curr_task
+                            self.dead_worker_busy.append(curr_task)
             # time.sleep(0.1)
 
     def listenIncomingMessage(self):
@@ -129,7 +129,8 @@ class Manager:
                                 print("Detect dead worker!!!!!!!!!!!!!!!!!!!!")
                                 self.getReadyedWorkers()
                                 self.checkTaskJobAtBeginning()
-                                self.dead_worker_busy.clear()
+                                self.dead_worker_busy.pop(0)
+                                continue
                             break
                         message_chunks.append(data)
                 message_bytes = b''.join(message_chunks)
@@ -150,19 +151,22 @@ class Manager:
                 curr_filelist = self.filelist_remaining.get()
                 first_worker = self.readyed_workers.get()
                 job_id = self.message_dict["job_id"]
-                if self.exeJobState == 'MAPPING':
+                if self.exeJobState in (
+                        'MAPPING', 'MAPPING_END', 'REDUCING', 'REDUCING_END'):
                     output_directory = \
-                        self.tmp / 'job-{}'.format(job_id) / "mapper-output"
+                        self.tmp / 'job-{}'.format(job_id) / "mapper-output" \
+                        if self.exeJobState in ('MAPPING', 'MAPPING_END') else \
+                        self.tmp / 'job-{}'.format(job_id) / "reducer-output"
+                    executable = self.message_dict["mapper_executable"] \
+                        if self.exeJobState in ('MAPPING', 'MAPPING_END') else \
+                        self.message_dict["reducer_executable"]
                     self.sendMappingTask(
-                        curr_filelist, self.message_dict["mapper_executable"],
+                        curr_filelist, executable,
                         output_directory, first_worker.pid
                     )
-                if self.exeJobState == 'REDUCING':
-                    output_directory = \
-                        self.tmp / 'job-{}'.format(job_id) / "reducer-output"
-                    self.sendMappingTask(
-                        curr_filelist, self.message_dict["reducer_executable"],
-                        output_directory, first_worker.pid
+                if self.exeJobState == 'GROUPING_ONE':
+                    self.sendGroupingTask(
+                        curr_filelist[0], curr_filelist[1], first_worker.pid
                     )
                 self.workers[first_worker.pid].state = WorkerState.BUSY
                 self.workers[first_worker.pid].modify_curr_task(curr_filelist)
@@ -415,6 +419,8 @@ class Manager:
     def executeMap(self, msg_dict, partitioned_filelist):
         """Execute the mapping stage, assign mapping tasks to readyed workers
         in registered order. Note the # workers < # tasks case."""
+        job_id = msg_dict["job_id"]
+        output_directory = self.tmp / f"job-{job_id}" / "mapper-output"
         for filelist in partitioned_filelist:
             self.filelist_remaining.put(filelist)
         logging.info("Manager:%s begin map stage", self.port)
@@ -425,9 +431,6 @@ class Manager:
             if not self.filelist_remaining.empty():
                 curr_filelist = self.filelist_remaining.get()
                 firstWorker = self.readyed_workers.get()
-                job_id = msg_dict["job_id"]
-                output_directory = \
-                    self.tmp / 'job-{}'.format(job_id) / "mapper-output"
                 self.sendMappingTask(
                     curr_filelist, msg_dict["mapper_executable"],
                     output_directory, firstWorker.pid
@@ -456,7 +459,9 @@ class Manager:
                 filelist, output_file, curr_worker.pid
             )
             self.workers[curr_worker.pid].state = WorkerState.BUSY
-            self.workers[curr_worker.pid].modify_curr_task(filelist)
+            self.workers[curr_worker.pid].modify_curr_task(
+                (filelist, output_file)
+            )
 
     def executeMerge(self, msg_dict):
         """Use heapq to merge sort all lines in all files, then perform robin
@@ -490,6 +495,8 @@ class Manager:
     def executeReduce(self, msg_dict, partitioned_filelist):
         """Execute the reducing stage, assign reducing tasks to readyed workers
         in registered order. Note the # workers < # tasks case."""
+        job_id = msg_dict["job_id"]
+        output_directory = self.tmp / f"job-{job_id}" / "reducer-output"
         for filelist in partitioned_filelist:
             self.filelist_remaining.put(filelist)
         logging.info("Manager:%s begin reduce stage", self.port)
@@ -500,9 +507,6 @@ class Manager:
             if not self.filelist_remaining.empty():
                 curr_filelist = self.filelist_remaining.get()
                 curr_worker = self.readyed_workers.get()
-                job_id = msg_dict["job_id"]
-                output_directory = \
-                    self.tmp / 'job-{}'.format(job_id) / "reducer-output"
                 self.sendMappingTask(
                     curr_filelist, msg_dict["reducer_executable"],
                     output_directory, curr_worker.pid
