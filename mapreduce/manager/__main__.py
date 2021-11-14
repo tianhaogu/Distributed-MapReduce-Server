@@ -150,12 +150,20 @@ class Manager:
                 curr_filelist = self.filelist_remaining.get()
                 first_worker = self.readyed_workers.get()
                 job_id = self.message_dict["job_id"]
-                output_directory = \
-                    self.tmp / 'job-{}'.format(job_id) / "mapper-output"
-                self.sendMappingTask(
-                    curr_filelist, self.message_dict["mapper_executable"],
-                    output_directory, first_worker.pid
-                )
+                if self.exeJobState == 'MAPPING':
+                    output_directory = \
+                        self.tmp / 'job-{}'.format(job_id) / "mapper-output"
+                    self.sendMappingTask(
+                        curr_filelist, self.message_dict["mapper_executable"],
+                        output_directory, first_worker.pid
+                    )
+                if self.exeJobState == 'REDUCING':
+                    output_directory = \
+                        self.tmp / 'job-{}'.format(job_id) / "reducer-output"
+                    self.sendMappingTask(
+                        curr_filelist, self.message_dict["reducer_executable"],
+                        output_directory, first_worker.pid
+                    )
                 self.workers[first_worker.pid].state = WorkerState.BUSY
                 self.workers[first_worker.pid].modify_curr_task(curr_filelist)
                 if self.filelist_remaining.empty():
@@ -167,8 +175,7 @@ class Manager:
             pass
         elif not self.jobQueue.empty():
             if self.serverState == 'READY':
-                while not self.readyed_workers.empty():
-                    useless_worker = self.readyed_workers.get()
+                self.readyed_workers.queue.clear()
                 self.getReadyedWorkers()
                 if not self.readyed_workers.empty():
                     self.serverState = 'EXECUTING'
