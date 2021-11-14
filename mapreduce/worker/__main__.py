@@ -1,10 +1,17 @@
-"""Implement the Worker class."""
+"""Map-reducer worker.
+
+The purpose of this class is to run a worker to recieve message from managers
+and doing the work assigned by the manager. After finishing the work, the
+workers will send message to notify the manager.
+Author: Chenkai, Ori, Tianhao
+Email: gtianhao@umich.edu
+"""
 import os
 import threading
 import socket
+import time
 import logging
 import json
-import time
 from pathlib import Path
 import subprocess
 import click
@@ -21,13 +28,14 @@ class Worker:
         logging.info("Starting worker:%s", worker_port)
         logging.info("Worker:%s PWD %s", worker_port, os.getcwd())
 
-        self.manager_port = manager_port
-        self.manager_hb_port = manager_hb_port
+        self.manager_ports = {
+            "manager_port": manager_port,
+            "manager_hb_port": manager_hb_port
+        }
         self.worker_port = worker_port
         self.shutdown = False
         self.state = ''
         self.registered = False
-        self.message_dict = {"message_type": ''}
         self.pid = os.getpid()
         self.udp_hb_thread = threading.Thread(
             target=self.send_hb_message
@@ -40,7 +48,10 @@ class Worker:
         """Send heartbeat message back to the manager after it registers."""
         while not self.shutdown:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.connect(("localhost", self.manager_hb_port))
+                sock.connect((
+                    "localhost",
+                    self.manager_ports["manager_hb_port"]
+                ))
                 message = json.dumps(
                     {"message_type": "heartbeat", "worker_pid": self.pid}
                 )
@@ -59,58 +70,37 @@ class Worker:
                 if not self.registered:
                     self.send_registration()
                 try:
-                    clientsocket, address = sock.accept()
+                    _clientsocket, address = sock.accept()
                 except socket.timeout:
                     continue
                 print("Connection from", address[0])
-                with clientsocket:
-                    message_chunks = []
+                with _clientsocket:
+                    _message_chunks = []
                     while True:
                         try:
-                            data = clientsocket.recv(4096)
+                            _data = _clientsocket.recv(4096)
                         except socket.timeout:
                             continue
-                        if not data:
+                        if not _data:
                             break
-                        message_chunks.append(data)
-                message_bytes = b''.join(message_chunks)
-                message_str = message_bytes.decode("utf-8")
+                        _message_chunks.append(_data)
+                _message_bytes = b''.join(_message_chunks)
+                _message_str = _message_bytes.decode("utf-8")
 
                 try:
-                    msg_dict = json.loads(message_str)
+                    msg_dict = json.loads(_message_str)
                 except json.JSONDecodeError:
                     continue
                 logging.debug(msg_dict)
-                self.message_dict = msg_dict
-                if self.message_dict["message_type"] == "shutdown":
-                    self.shutdown = True
-                elif self.message_dict["message_type"] == "register_ack":
-                    self.udp_hb_thread.start()
-                    self.registered = True
-                    self.state = WorkerState.READY
-                elif self.message_dict["message_type"] == "new_worker_task":
-                    if self.registered and self.state == WorkerState.READY:
-                        self.perform_mapping(self.message_dict)
-                    else:
-                        logging.debug(
-                            "ERROR! Do Not assign task to a non-ready worker!"
-                        )
-                elif self.message_dict["message_type"] == "new_sort_task":
-                    if self.registered and self.state == WorkerState.READY:
-                        self.perform_sorting(self.message_dict)
-                    else:
-                        logging.debug(
-                            "ERROR! Do not assign task to a non-ready worker!"
-                        )
-                else:
-                    pass
+                self.handle_incoming_message(msg_dict)
+
             if self.udp_hb_thread.is_alive():
                 self.udp_hb_thread.join()
 
     def send_registration(self):
         """Send the registration message to the manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.connect(("localhost", self.manager_port))
+            sock.connect(("localhost", self.manager_ports["manager_port"]))
             rgst_message = json.dumps({
                 "message_type": "register",
                 "worker_host": "localhost",
@@ -118,6 +108,31 @@ class Worker:
                 "worker_pid": self.pid
             })
             sock.sendall(rgst_message.encode('utf-8'))
+
+    def handle_incoming_message(self, msg_dict):
+        """Handle any message received in the TCP socket from the manager."""
+        if msg_dict["message_type"] == "shutdown":
+            self.shutdown = True
+        elif msg_dict["message_type"] == "register_ack":
+            self.udp_hb_thread.start()
+            self.registered = True
+            self.state = WorkerState.READY
+        elif msg_dict["message_type"] == "new_worker_task":
+            if self.registered and self.state == WorkerState.READY:
+                self.perform_mapping(msg_dict)
+            else:
+                logging.debug(
+                    "ERROR! Do Not assign task to a non-ready worker!"
+                )
+        elif msg_dict["message_type"] == "new_sort_task":
+            if self.registered and self.state == WorkerState.READY:
+                self.perform_sorting(msg_dict)
+            else:
+                logging.debug(
+                    "ERROR! Do not assign task to a non-ready worker!"
+                )
+        else:
+            pass
 
     def perform_mapping(self, message_dict):
         """Perform the real mapping, pipe to the output via executable cmd."""
@@ -131,11 +146,10 @@ class Worker:
             output_directory = \
                 Path(message_dict["output_directory"]) / input_filename
             with open(input_directory, 'r') as infile:
-                outfile = open(str(output_directory), 'w')
-                subprocess.run(
-                    executable, stdin=infile, stdout=outfile, check=True
-                )
-                outfile.close()
+                with open(output_directory, 'w') as outfile:
+                    subprocess.run(
+                        executable, stdin=infile, stdout=outfile, check=True
+                    )
             output_files.append(str(output_directory))
         self.send_status_message(output_files, "output_files")
         self.state = WorkerState.READY
@@ -160,7 +174,7 @@ class Worker:
     def send_status_message(self, output_files, output_file_key):
         """Send the status messages to the manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.connect(("localhost", self.manager_port))
+            sock.connect(("localhost", self.manager_ports["manager_port"]))
             status_message = json.dumps({
                 "message_type": "status",
                 output_file_key: output_files,
