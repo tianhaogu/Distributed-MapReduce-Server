@@ -34,7 +34,7 @@ class Manager:
         self.serverState = 'READY'
         self.exeJobState = 'FREE'
         self.readyed_workers = Queue()
-        self.dead_worker_busy = []
+        # self.dead_worker_busy = []
         self.filelist_remaining = Queue()
         self.num_list_remaining = 0
 
@@ -98,7 +98,13 @@ class Manager:
                         if prev_state == WorkerState.BUSY:
                             curr_task = worker.access_curr_task()
                             self.filelist_remaining.put(curr_task)
-                            self.dead_worker_busy.append(curr_task)
+                            # self.dead_worker_busy.append(curr_task)
+                            whether_find = False
+                            while not whether_find:
+                                self.getReadyedWorkers()
+                                if self.readyed_workers.qsize() > 0:
+                                    whether_find = True
+                                    self.checkTaskJobAtBeginning()
             # time.sleep(0.1)
 
     def listenIncomingMessage(self):
@@ -125,12 +131,12 @@ class Manager:
                         except socket.timeout:
                             continue
                         if not data:
-                            if len(self.dead_worker_busy) != 0:
-                                print("Detect dead worker!!!!!!!!!!!!!!!!!!!!")
-                                self.getReadyedWorkers()
-                                self.checkTaskJobAtBeginning()
-                                self.dead_worker_busy.pop(0)
-                                continue
+                            # if len(self.dead_worker_busy) != 0:
+                            #     print("Detect dead worker!!!!!!!!!!!!!!!!!!!!")
+                            #     self.getReadyedWorkers()
+                            #     self.checkTaskJobAtBeginning()
+                            #     self.dead_worker_busy.pop(0)
+                            #     continue
                             break
                         message_chunks.append(data)
                 message_bytes = b''.join(message_chunks)
@@ -185,7 +191,7 @@ class Manager:
                     self.serverState = 'EXECUTING'
                     curr_job = self.jobQueue.get()
                     self.message_dict = curr_job.message_dict
-                    self.dead_worker_busy.clear()
+                    # self.dead_worker_busy.clear()
                     self.jobExecution(curr_job.message_dict, "mapping")
         else:
             pass
@@ -233,7 +239,7 @@ class Manager:
             self.message_dict = msg_dict
             self.jobCounter += 1
             self.serverState = "EXECUTING"
-            self.dead_worker_busy.clear()
+            # self.dead_worker_busy.clear()
             self.jobExecution(msg_dict, "mapping")  # start of job, only map
         else:
             self.jobQueue.put(Job(self.jobCounter, msg_dict))
@@ -253,7 +259,7 @@ class Manager:
                 logging.info("Manager:%s end map stage", self.port)
                 self.readyed_workers.queue.clear()
                 self.getReadyedWorkers()
-                self.dead_worker_busy.clear()
+                # self.dead_worker_busy.clear()
                 self.jobExecution(self.message_dict, "grouping_one")
             else:
                 pass  # all tasks assigned to workers, but not get back all.
@@ -262,10 +268,10 @@ class Manager:
             if self.num_list_remaining == 0:
                 self.readyed_workers.queue.clear()
                 self.getReadyedWorkers()
-                self.dead_worker_busy.clear()
+                # self.dead_worker_busy.clear()
                 self.jobExecution(self.message_dict, "grouping_two")
                 logging.info("Manager:%s end group stage", self.port)
-                self.dead_worker_busy.clear()
+                # self.dead_worker_busy.clear()
                 self.jobExecution(self.message_dict, "reducing")
             else:
                 pass  # need to wait for all workers to return sorting messages
@@ -278,7 +284,7 @@ class Manager:
             if self.num_list_remaining == 0:
                 logging.info("Manager:%s end reduce stage", self.port)
                 self.readyed_workers.queue.clear()
-                self.dead_worker_busy.clear()
+                # self.dead_worker_busy.clear()
                 self.jobExecution(self.message_dict, "wrapping")
             else:
                 pass  # all tasks assigned to workers, but not get back all.
