@@ -1,4 +1,4 @@
-# Multi-Process-Multi-Thread-MapReduce-Server
+# Distributed-MapReduce-Server
 
 Build a multi-process & multi-threaded MapReduce server that executes user-submitted MapReduce jobs, and simulates communication over Manager and Workers by TCP/UDP Socket in Python.
 
